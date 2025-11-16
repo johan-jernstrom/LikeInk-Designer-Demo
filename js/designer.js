@@ -50,6 +50,9 @@ function initCanvas() {
 
     // Add bleed area visualization
     addBleedArea();
+    
+    // Create rulers
+    createRulers();
 
     // Setup event listeners
     setupEventListeners();
@@ -156,6 +159,59 @@ function addBleedArea() {
 }
 
 /**
+ * Create rulers showing physical dimensions in mm
+ */
+function createRulers() {
+    const rulerTop = document.getElementById('ruler-top');
+    const rulerLeft = document.getElementById('ruler-left');
+    
+    if (!rulerTop || !rulerLeft) return;
+    
+    const displayWidth = Math.round(CANVAS_WIDTH * DISPLAY_SCALE);
+    const displayHeight = Math.round(CANVAS_HEIGHT * DISPLAY_SCALE);
+    
+    // Set ruler dimensions
+    rulerTop.style.width = displayWidth + 'px';
+    rulerLeft.style.height = displayHeight + 'px';
+    
+    // Create top ruler (horizontal) - every 10mm
+    for (let mm = 0; mm <= A5_WIDTH_MM; mm += 10) {
+        const pixels = mm * MM_TO_PIXELS * DISPLAY_SCALE;
+        const tick = document.createElement('div');
+        tick.className = 'ruler-tick' + (mm % 50 === 0 ? ' major' : '');
+        tick.style.left = pixels + 'px';
+        rulerTop.appendChild(tick);
+        
+        // Add labels every 50mm
+        if (mm % 50 === 0) {
+            const label = document.createElement('span');
+            label.className = 'ruler-label';
+            label.textContent = (mm/10) + ' cm';
+            label.style.left = (pixels - 12) + 'px';
+            rulerTop.appendChild(label);
+        }
+    }
+    
+    // Create left ruler (vertical) - every 10mm
+    for (let mm = 0; mm <= A5_HEIGHT_MM; mm += 10) {
+        const pixels = mm * MM_TO_PIXELS * DISPLAY_SCALE;
+        const tick = document.createElement('div');
+        tick.className = 'ruler-tick' + (mm % 50 === 0 ? ' major' : '');
+        tick.style.top = pixels + 'px';
+        rulerLeft.appendChild(tick);
+        
+        // Add labels every 50mm
+        if (mm % 50 === 0) {
+            const label = document.createElement('span');
+            label.className = 'ruler-label';
+            label.textContent = (mm/10) + ' cm';
+            label.style.top = (pixels - 12) + 'px';
+            rulerLeft.appendChild(label);
+        }
+    }
+}
+
+/**
  * Bring bleed area overlays to front
  */
 function bringBleedAreasToFront() {
@@ -183,6 +239,8 @@ function setupEventListeners() {
     const bringForwardBtn = document.getElementById('bring-forward-btn');
     const sendBackwardBtn = document.getElementById('send-backward-btn');
     const clearBtn = document.getElementById('clear-btn');
+    const fillSheetBtn = document.getElementById('fill-sheet-btn');
+    const addToCartBtn = document.getElementById('add-to-cart-btn');
     
     if (selectAllBtn) selectAllBtn.addEventListener('click', selectAll);
     if (deselectBtn) deselectBtn.addEventListener('click', deselectAll);
@@ -193,6 +251,8 @@ function setupEventListeners() {
     if (bringForwardBtn) bringForwardBtn.addEventListener('click', bringForward);
     if (sendBackwardBtn) sendBackwardBtn.addEventListener('click', sendBackward);
     if (clearBtn) clearBtn.addEventListener('click', clearCanvas);
+    if (fillSheetBtn) fillSheetBtn.addEventListener('click', fillSheet);
+    if (addToCartBtn) addToCartBtn.addEventListener('click', exportToPNG);
 
     // Keyboard shortcuts
     document.addEventListener('keydown', handleKeyboard);
@@ -362,11 +422,18 @@ function deleteSelected() {
     if (activeObject.type === 'activeSelection') {
         const objects = activeObject.getObjects().slice(); // Create a copy of the array
         canvas.discardActiveObject(); // Deselect first
+        
+        // Temporarily disable state saving for bulk delete
+        isRestoring = true;
         objects.forEach(obj => {
             canvas.remove(obj);
         });
+        isRestoring = false;
+        
+        // Save as single state
+        saveState();
     } else {
-        // Handle single object
+        // Handle single object - normal save will trigger
         canvas.remove(activeObject);
     }
     
@@ -441,9 +508,184 @@ function clearCanvas() {
     const objects = canvas.getObjects().filter(obj => 
         obj !== bleedRect && !bleedOverlays.includes(obj)
     );
+    
+    // Temporarily disable state saving for bulk clear
+    isRestoring = true;
     objects.forEach(obj => canvas.remove(obj));
+    isRestoring = false;
+    
+    // Save as single state
     canvas.renderAll();
     updateToolbarState();
+    saveState();
+}
+
+/**
+ * Fill sheet with as many copies as possible
+ */
+function fillSheet() {
+    const MARGIN_MM = 3;
+    const MARGIN_PIXELS = MARGIN_MM * MM_TO_PIXELS;
+    
+    // Temporarily disable state saving
+    isRestoring = true;
+    
+    // Get all user objects
+    const userObjects = canvas.getObjects().filter(obj => 
+        obj.name !== 'bleedOverlay' && obj.name !== 'bleedArea'
+    );
+    
+    if (userObjects.length === 0) {
+        alert('Please add some images first!');
+        isRestoring = false;
+        return;
+    }
+    
+    // First, arrange original objects in a grid layout without overlapping
+    const startX = BLEED_PIXELS + MARGIN_PIXELS;
+    const startY = BLEED_PIXELS + MARGIN_PIXELS;
+    const availableWidth = CANVAS_WIDTH - (BLEED_PIXELS * 2) - (MARGIN_PIXELS * 2);
+    const availableHeight = CANVAS_HEIGHT - (BLEED_PIXELS * 2) - (MARGIN_PIXELS * 2);
+    
+    let currentX = startX;
+    let currentY = startY;
+    let rowHeight = 0;
+    
+    // Position each original object
+    userObjects.forEach((obj, index) => {
+        const bounds = obj.getBoundingRect(true);
+        const objWidth = bounds.width;
+        const objHeight = bounds.height;
+        
+        // Check if object fits in current row
+        if (currentX > startX && currentX + objWidth > startX + availableWidth) {
+            // Move to next row
+            currentX = startX;
+            currentY += rowHeight + MARGIN_PIXELS;
+            rowHeight = 0;
+        }
+        
+        // Calculate center position for the object
+        const centerX = currentX + objWidth / 2;
+        const centerY = currentY + objHeight / 2;
+        
+        obj.set({
+            left: centerX,
+            top: centerY
+        });
+        obj.setCoords();
+        
+        // Update position for next object
+        currentX += objWidth + MARGIN_PIXELS;
+        rowHeight = Math.max(rowHeight, objHeight);
+    });
+    
+    // Calculate bounding box of the arranged objects
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    
+    userObjects.forEach(obj => {
+        const bounds = obj.getBoundingRect(true);
+        minX = Math.min(minX, bounds.left);
+        minY = Math.min(minY, bounds.top);
+        maxX = Math.max(maxX, bounds.left + bounds.width);
+        maxY = Math.max(maxY, bounds.top + bounds.height);
+    });
+    
+    const groupWidth = maxX - minX;
+    const groupHeight = maxY - minY;
+    
+    // Calculate how many copies of the entire group fit
+    const stepX = groupWidth + MARGIN_PIXELS;
+    const stepY = groupHeight + MARGIN_PIXELS;
+    const copiesX = Math.floor(availableWidth / stepX);
+    const copiesY = Math.floor(availableHeight / stepY);
+    
+    if (copiesX < 1 || copiesY < 1) {
+        alert('Design is too large to fit multiple copies!');
+        canvas.renderAll();
+        return;
+    }
+    
+    // Create copies of the entire group
+    const allCopies = [];
+    
+    for (let row = 0; row < copiesY; row++) {
+        for (let col = 0; col < copiesX; col++) {
+            // Skip the first position (0,0) as original objects are already there
+            if (row === 0 && col === 0) continue;
+            
+            // Calculate offset for this grid cell
+            const cellOffsetX = col * stepX;
+            const cellOffsetY = row * stepY;
+            
+            // Clone each object in the group
+            userObjects.forEach(obj => {
+                obj.clone(cloned => {
+                    // Position clone based on the original position plus cell offset
+                    cloned.set({
+                        left: obj.left + cellOffsetX,
+                        top: obj.top + cellOffsetY
+                    });
+                    
+                    canvas.add(cloned);
+                    allCopies.push(cloned);
+                });
+            });
+        }
+    }
+    
+    // Ensure bleed areas stay on top and save state once
+    setTimeout(() => {
+        bringBleedAreasToFront();
+        canvas.renderAll();
+        
+        // Re-enable state saving and save the entire fill operation as one state
+        isRestoring = false;
+        saveState();
+    }, 100);
+}
+
+/**
+ * Export canvas to PNG (excluding bleed overlays)
+ */
+function exportToPNG() {
+    // Temporarily hide bleed overlays
+    bleedOverlays.forEach(overlay => overlay.set('opacity', 0));
+    bleedRect.set('opacity', 0);
+    
+    // Mirror the canvas horizontally
+    canvas.getObjects().forEach(obj => {
+        if (obj.name !== 'bleedOverlay' && obj.name !== 'bleedArea') {
+            obj.set('flipX', !obj.flipX);
+        }
+    });
+    
+    canvas.renderAll();
+    
+    // Export canvas as PNG at full resolution (300 DPI)
+    const dataURL = canvas.toDataURL({
+        format: 'png',
+        quality: 1,
+        multiplier: 1 / DISPLAY_SCALE // Scale back to original 300 DPI resolution
+    });
+    
+    // Restore objects to original state (un-mirror)
+    canvas.getObjects().forEach(obj => {
+        if (obj.name !== 'bleedOverlay' && obj.name !== 'bleedArea') {
+            obj.set('flipX', !obj.flipX);
+        }
+    });
+    
+    // Restore bleed overlays
+    bleedOverlays.forEach(overlay => overlay.set('opacity', 1));
+    bleedRect.set('opacity', 1);
+    canvas.renderAll();
+    
+    // Create download link
+    const link = document.createElement('a');
+    link.download = `tattoo-design-${Date.now()}.png`;
+    link.href = dataURL;
+    link.click();
 }
 
 /**

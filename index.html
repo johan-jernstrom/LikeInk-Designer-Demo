@@ -60,13 +60,26 @@
                     <button id="clear-btn" class="btn btn-warning">
                         🔄 Clear All
                     </button>
+                    <button id="fill-sheet-btn" class="btn btn-secondary">
+                        📋 Fill Sheet
+                    </button>
+                </div>
+
+                <div class="toolbar-group">
+                    <button id="add-to-cart-btn" class="btn btn-primary">
+                        🛒 Add to Cart
+                    </button>
                 </div>
             </div>
 
             <!-- Canvas Container -->
             <div class="canvas-container">
                 <div class="canvas-wrapper">
-                    <canvas id="designer-canvas"></canvas>
+                    <div class="ruler-top" id="ruler-top"></div>
+                    <div class="ruler-left" id="ruler-left"></div>
+                    <div class="canvas-area">
+                        <canvas id="designer-canvas"></canvas>
+                    </div>
                 </div>
                 <div class="canvas-info">
                     <p>📏 A5 Landscape (210mm × 148mm) • 300 DPI</p>
@@ -87,6 +100,7 @@
                     <li><strong>Duplicate:</strong> Select an image and click "Duplicate" or press Ctrl+D</li>
                     <li><strong>Delete:</strong> Select an image and click "Delete" or press Delete key</li>
                     <li><strong>Undo/Redo:</strong> Use Ctrl+Z to undo, Ctrl+Y to redo</li>
+                    <li><strong>Fill Sheet:</strong> Automatically arranges images and fills the entire sheet with copies (3mm spacing)</li>
                     <li><strong>Bleed Area:</strong> Keep important parts inside the red dashed line</li>
                 </ul>
             </div>

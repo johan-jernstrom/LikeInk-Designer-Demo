@@ -114,14 +114,91 @@ header p {
 }
 
 .canvas-wrapper {
-    display: flex;
-    justify-content: center;
+    display: grid;
+    grid-template-areas:
+        ". top-ruler"
+        "left-ruler canvas";
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
     align-items: center;
     background: #f8f9fa;
     padding: 30px;
     border-radius: 8px;
     overflow: auto;
     min-height: 500px;
+}
+
+.ruler-top {
+    grid-area: top-ruler;
+    display: flex;
+    align-items: flex-end;
+    height: 30px;
+    background: #e9ecef;
+    border-bottom: 2px solid #666;
+    position: relative;
+    margin-bottom: 5px;
+}
+
+.ruler-left {
+    grid-area: left-ruler;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    width: 30px;
+    background: #e9ecef;
+    border-right: 2px solid #666;
+    position: relative;
+    margin-right: 5px;
+    top: -12px;
+}
+
+.ruler-tick {
+    position: absolute;
+    background: #666;
+}
+
+.ruler-top .ruler-tick {
+    height: 10px;
+    width: 1px;
+    bottom: 0;
+}
+
+.ruler-top .ruler-tick.major {
+    height: 15px;
+    width: 2px;
+}
+
+.ruler-left .ruler-tick {
+    width: 10px;
+    height: 1px;
+    right: 0;
+}
+
+.ruler-left .ruler-tick.major {
+    width: 15px;
+    height: 2px;
+}
+
+.ruler-label {
+    position: absolute;
+    font-size: 9px;
+    color: #333;
+    font-weight: 500;
+}
+
+.ruler-top .ruler-label {
+    top: 2px;
+}
+
+.ruler-left .ruler-label {
+    left: 2px;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+}
+
+.canvas-area {
+    grid-area: canvas;
 }
 
 #designer-canvas {
