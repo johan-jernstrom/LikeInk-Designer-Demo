@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LikeInk Designer - Custom Tattoo Sheet Designer</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>LikeInk Designer</h1>
+            <p>Design your custom A5 tattoo sheet</p>
+        </header>
+
+        <div class="designer-workspace">
+            <!-- Toolbar -->
+            <div class="toolbar">
+                <div class="toolbar-group">
+                    <label for="file-upload" class="btn btn-primary">
+                        📁 Upload Image
+                    </label>
+                    <input type="file" id="file-upload" accept="image/*" multiple style="display: none;">
+                </div>
+
+                <div class="toolbar-group">
+                    <button id="select-all-btn" class="btn btn-secondary">
+                        ☑️ Select All
+                    </button>
+                    <button id="deselect-btn" class="btn btn-secondary" disabled>
+                        ☐ Deselect
+                    </button>
+                    <button id="duplicate-btn" class="btn btn-secondary" disabled>
+                        📋 Duplicate
+                    </button>
+                    <button id="delete-btn" class="btn btn-danger" disabled>
+                        🗑️ Delete
+                    </button>
+                </div>
+
+                <div class="toolbar-group">
+                    <button id="undo-btn" class="btn btn-secondary" disabled>
+                        ↩️ Undo
+                    </button>
+                    <button id="redo-btn" class="btn btn-secondary" disabled>
+                        ↪️ Redo
+                    </button>
+                </div>
+
+                <div class="toolbar-group">
+                    <button id="bring-forward-btn" class="btn btn-secondary" disabled>
+                        ⬆️ Forward
+                    </button>
+                    <button id="send-backward-btn" class="btn btn-secondary" disabled>
+                        ⬇️ Backward
+                    </button>
+                </div>
+
+                <div class="toolbar-group">
+                    <button id="clear-btn" class="btn btn-warning">
+                        🔄 Clear All
+                    </button>
+                </div>
+            </div>
+
+            <!-- Canvas Container -->
+            <div class="canvas-container">
+                <div class="canvas-wrapper">
+                    <canvas id="designer-canvas"></canvas>
+                </div>
+                <div class="canvas-info">
+                    <p>📏 A5 Landscape (210mm × 148mm) • 300 DPI</p>
+                    <p class="bleed-info">Red dashed line shows 5mm bleed area - keep important elements inside</p>
+                </div>
+            </div>
+
+            <!-- Instructions -->
+            <div class="instructions">
+                <h3>How to use:</h3>
+                <ul>
+                    <li><strong>Upload:</strong> Click "Upload Image" or drag & drop images onto the canvas</li>
+                    <li><strong>Move:</strong> Drag images around the canvas</li>
+                    <li><strong>Resize:</strong> Drag corner handles to resize (hold Shift for proportional)</li>
+                    <li><strong>Rotate:</strong> Drag the rotation handle at the top</li>
+                    <li><strong>Select All:</strong> Press Ctrl+A to select all images</li>
+                    <li><strong>Deselect:</strong> Press ESC to deselect all images</li>
+                    <li><strong>Duplicate:</strong> Select an image and click "Duplicate" or press Ctrl+D</li>
+                    <li><strong>Delete:</strong> Select an image and click "Delete" or press Delete key</li>
+                    <li><strong>Undo/Redo:</strong> Use Ctrl+Z to undo, Ctrl+Y to redo</li>
+                    <li><strong>Bleed Area:</strong> Keep important parts inside the red dashed line</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load Fabric.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+    <script src="js/designer.js"></script>
+</body>
+</html>
