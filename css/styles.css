@@ -411,11 +411,98 @@ header p {
     transform: scale(1);
 }
 
-.upload-dialog-content h2 {
+.dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 20px;
+}
+
+.upload-dialog-content h2 {
+    margin: 0;
     color: #333;
-    text-align: center;
     font-size: 1.8rem;
+}
+
+.close-dialog-btn {
+    background: none;
+    border: none;
+    font-size: 1.8rem;
+    color: #666;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    line-height: 1;
+}
+
+.close-dialog-btn:hover {
+    background: #f0f0f0;
+    color: #333;
+}
+
+.close-dialog-btn:active {
+    transform: scale(0.95);
+}
+
+/* Content Type Selector */
+.content-type-selector {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 25px;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 0;
+}
+
+.content-type-btn {
+    flex: 1;
+    padding: 12px 20px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-size: 1rem;
+    font-weight: 500;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-bottom: -2px;
+}
+
+.content-type-btn:hover {
+    color: #667eea;
+    background: #f8f9ff;
+}
+
+.content-type-btn.active {
+    color: #667eea;
+    border-bottom-color: #667eea;
+    background: #f8f9ff;
+}
+
+/* Content Sections */
+.content-section {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+
+.content-section.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* Upload Zone */
@@ -537,6 +624,139 @@ header p {
 .size-control input[type="range"]::-moz-range-thumb:hover {
     background: #764ba2;
     transform: scale(1.2);
+}
+
+/* Text Input Section */
+.text-input-container {
+    margin-bottom: 25px;
+}
+
+.text-input-container label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 500;
+    color: #333;
+}
+
+.text-input {
+    width: 100%;
+    padding: 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.3s ease;
+    min-height: 120px;
+}
+
+.text-input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.text-size-control {
+    margin-bottom: 25px;
+}
+
+.text-size-control label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 500;
+    color: #333;
+    text-align: center;
+    font-size: 1.1rem;
+}
+
+.text-size-control #text-size-value {
+    color: #667eea;
+    font-weight: 700;
+}
+
+.text-size-control input[type="range"] {
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: #e0e0e0;
+    outline: none;
+    -webkit-appearance: none;
+}
+
+.text-size-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #667eea;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.text-size-control input[type="range"]::-webkit-slider-thumb:hover {
+    background: #764ba2;
+    transform: scale(1.2);
+}
+
+.text-size-control input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #667eea;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+}
+
+.text-size-control input[type="range"]::-moz-range-thumb:hover {
+    background: #764ba2;
+    transform: scale(1.2);
+}
+
+.text-size-control.warning label {
+    color: #e74c3c;
+}
+
+.text-size-control.warning #text-size-value {
+    color: #e74c3c;
+}
+
+/* Text Size Warning */
+.text-size-warning {
+    margin-bottom: 20px;
+    padding: 12px 15px;
+    background: #fee;
+    border: 2px solid #e74c3c;
+    border-radius: 8px;
+}
+
+.text-size-warning p {
+    margin: 0;
+    color: #c0392b;
+    font-size: 0.95rem;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Text Width Display */
+.text-width-display {
+    margin-bottom: 25px;
+    padding: 15px;
+    background: #f8f9ff;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.text-width-display p {
+    margin: 0;
+    font-size: 1rem;
+    color: #555;
+}
+
+.text-width-display #text-width-value {
+    font-weight: 700;
+    color: #667eea;
+    font-size: 1.2rem;
 }
 
 /* Dialog Question */

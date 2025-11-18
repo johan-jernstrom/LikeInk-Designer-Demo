@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LikeInk Designer - Custom Tattoo Sheet Designer</title>
     <link rel="stylesheet" href="css/styles.css">
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -17,6 +19,9 @@
             <!-- Toolbar -->
             <div class="toolbar">
                 <div class="toolbar-group">
+                    <button id="open-upload-dialog-btn" class="btn btn-primary">
+                        ➕ Add Content
+                    </button>
                     <label for="file-upload" class="btn btn-primary">
                         📁 Upload Image
                     </label>
@@ -100,7 +105,8 @@
                     <li><strong>Duplicate:</strong> Select an image and click "Duplicate" or press Ctrl+D</li>
                     <li><strong>Delete:</strong> Select an image and click "Delete" or press Delete key</li>
                     <li><strong>Undo/Redo:</strong> Use Ctrl+Z to undo, Ctrl+Y to redo</li>
-                    <li><strong>Fill Sheet:</strong> Automatically arranges images and fills the entire sheet with copies (3mm spacing)</li>
+                    <li><strong>Fill Sheet:</strong> Automatically arranges images and fills the entire sheet with
+                        copies (3mm spacing)</li>
                     <li><strong>Bleed Area:</strong> Keep important parts inside the red dashed line</li>
                 </ul>
             </div>
@@ -110,34 +116,71 @@
     <!-- Upload Dialog -->
     <div id="upload-dialog" class="upload-dialog">
         <div class="upload-dialog-content">
-            <h2>Add Image to Sheet</h2>
-            
-            <!-- Upload Zone -->
-            <div id="upload-zone" class="upload-zone">
-                <div class="upload-zone-content">
-                    <div class="upload-icon">📁</div>
-                    <p class="upload-text">Click to upload or drag & drop an image</p>
-                    <p class="upload-hint">Supports PNG, JPG, SVG</p>
-                    <input type="file" id="dialog-file-upload" accept="image/*" style="display: none;">
+            <div class="dialog-header">
+                <h2 id="dialog-title">Add Content to Sheet</h2>
+                <button id="close-dialog-btn" class="close-dialog-btn" title="Close">✕</button>
+            </div>
+
+            <!-- Content Type Selector -->
+            <div class="content-type-selector">
+                <button id="image-mode-btn" class="content-type-btn active">📁 Image</button>
+                <button id="text-mode-btn" class="content-type-btn">📝 Text</button>
+            </div>
+
+            <!-- Image Upload Section -->
+            <div id="image-section" class="content-section active">
+                <!-- Upload Zone -->
+                <div id="upload-zone" class="upload-zone">
+                    <div class="upload-zone-content">
+                        <div class="upload-icon">📁</div>
+                        <p class="upload-text">Click to upload or drag & drop an image</p>
+                        <p class="upload-hint">Supports PNG, JPG, SVG</p>
+                        <input type="file" id="dialog-file-upload" accept="image/*" style="display: none;">
+                    </div>
+                </div>
+
+                <!-- Preview Section (hidden by default) -->
+                <div id="preview-section" class="preview-section" style="display: none;">
+                    <div class="preview-container">
+                        <img id="preview-image" src="" alt="Preview">
+                    </div>
+
+                    <div class="size-control">
+                        <label for="size-slider">Image Width: <span id="size-value">10</span> cm</label>
+                        <input type="range" id="size-slider" min="10" max="210" value="100" step="10">
+                    </div>
+
+                    <div class="dialog-question">
+                        <p>Do you want to add more designs to the sheet?</p>
+                        <div class="dialog-buttons">
+                            <button id="fill-sheet-dialog-btn" class="btn btn-primary">No, fill sheet with this one</button>
+                            <button id="add-more-btn" class="btn btn-secondary">Yes, let me add more images</button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Preview Section (hidden by default) -->
-            <div id="preview-section" class="preview-section" style="display: none;">
-                <div class="preview-container">
-                    <img id="preview-image" src="" alt="Preview">
+            <!-- Text Input Section (hidden by default) -->
+            <div id="text-section" class="content-section">
+                <div class="text-input-container">
+                    <label for="text-input">Enter your text:</label>
+                    <textarea id="text-input" class="text-input" placeholder="Type your text here..." rows="6"></textarea>
                 </div>
-                
-                <div class="size-control">
-                    <label for="size-slider">Image Width: <span id="size-value">10</span> cm</label>
-                    <input type="range" id="size-slider" min="10" max="210" value="100" step="10">
+
+                <div class="text-size-control">
+                    <label for="text-size-slider">Text Size: <span id="text-size-value">—</span> cm</label>
+                    <input type="range" id="text-size-slider" min="20" max="200" value="40" step="5">
+                </div>
+
+                <div id="text-size-warning" class="text-size-warning" style="display: none;">
+                    <p>⚠️ Text is too wide! It exceeds the printable area and will be cut off.</p>
                 </div>
 
                 <div class="dialog-question">
                     <p>Do you want to add more designs to the sheet?</p>
                     <div class="dialog-buttons">
-                        <button id="fill-sheet-dialog-btn" class="btn btn-primary">No, fill sheet with this one</button>
-                        <button id="add-more-btn" class="btn btn-secondary">Yes, let me add more images</button>
+                        <button id="fill-sheet-text-btn" class="btn btn-primary">No, fill sheet with this text</button>
+                        <button id="add-text-btn" class="btn btn-secondary">Yes, let me add more content</button>
                     </div>
                 </div>
             </div>
@@ -145,7 +188,8 @@
     </div>
 
     <!-- Load Fabric.js from CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fabric@latest/dist/index.min.js"></script>
     <script src="js/designer.js"></script>
 </body>
+
 </html>

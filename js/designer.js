@@ -18,7 +18,6 @@ const DUPLICATION_OFFSET = 50; // Offset in pixels when duplicating objects
 
 // Canvas default dimensions at 300 DPI
 let canvas;
-let bleedRect;
 let bleedOverlays = [];
 let imageUploadCount = 0; // Counter to offset new uploads
 
@@ -123,8 +122,8 @@ function initCanvas() {
     canvas.on('selection:cleared', updateToolbarState);
 
     // Keep bleed overlays on top when objects are added or moved
-    canvas.on('object:added', bringBleedAreasToFront);
-    canvas.on('object:modified', bringBleedAreasToFront);
+    canvas.on('object:added', bringBleedObjectsToFront);
+    canvas.on('object:modified', bringBleedObjectsToFront);
 
     // Track changes for undo/redo
     canvas.on('object:added', saveState);
@@ -140,24 +139,16 @@ function initCanvas() {
  * Removes any existing bleed area objects before creating new ones.
  */
 function createBleedArea() {
-    // Remove old bleed areas first
-    if (bleedOverlays && bleedOverlays.length > 0) {
-        bleedOverlays.forEach(overlay => {
-            if (canvas.contains(overlay)) {
-                canvas.remove(overlay);
-            }
+    canvas.getObjects()
+        .filter(obj => isBleedObject(obj))
+        .forEach(obj => {
+            canvas.remove(obj);
         });
-    }
-    if (bleedRect && canvas.contains(bleedRect)) {
-        canvas.remove(bleedRect);
-    }
     bleedOverlays = [];
-    bleedRect = null;
-    canvas.renderAll(); // Force render to actually remove old areas
 
     // Create semi-transparent white overlays for the bleed areas (areas that will be trimmed)
     // Top bleed overlay
-    const topOverlay = new fabric.Rect({
+    canvas.add(new fabric.Rect({
         left: 0,
         top: 0,
         width: canvas.width / canvas.getZoom(),
@@ -167,10 +158,10 @@ function createBleedArea() {
         selectable: false,
         evented: false,
         name: 'bleedOverlay'
-    });
+    }));
 
     // Bottom bleed overlay
-    const bottomOverlay = new fabric.Rect({
+    canvas.add(new fabric.Rect({
         left: 0,
         top: (canvas.height / canvas.getZoom()) - BLEED_PIXELS,
         width: canvas.width / canvas.getZoom(),
@@ -180,10 +171,10 @@ function createBleedArea() {
         selectable: false,
         evented: false,
         name: 'bleedOverlay'
-    });
+    }));
 
     // Left bleed overlay
-    const leftOverlay = new fabric.Rect({
+    canvas.add(new fabric.Rect({
         left: 0,
         top: BLEED_PIXELS,
         width: BLEED_PIXELS,
@@ -193,10 +184,10 @@ function createBleedArea() {
         selectable: false,
         evented: false,
         name: 'bleedOverlay'
-    });
+    }));
 
     // Right bleed overlay
-    const rightOverlay = new fabric.Rect({
+    canvas.add(new fabric.Rect({
         left: (canvas.width / canvas.getZoom()) - BLEED_PIXELS,
         top: BLEED_PIXELS,
         width: BLEED_PIXELS,
@@ -206,10 +197,10 @@ function createBleedArea() {
         selectable: false,
         evented: false,
         name: 'bleedOverlay'
-    });
+    }));
 
     // Red dashed line showing the safe area boundary
-    bleedRect = new fabric.Rect({
+    canvas.add(new fabric.Rect({
         left: BLEED_PIXELS,
         top: BLEED_PIXELS,
         width: (canvas.width / canvas.getZoom()) - (BLEED_PIXELS * 2),
@@ -221,20 +212,10 @@ function createBleedArea() {
         selectable: false,
         evented: false,
         name: 'bleedArea'
-    });
-
-    // Add overlays to array for later reference
-    bleedOverlays = [topOverlay, bottomOverlay, leftOverlay, rightOverlay];
-
-    // Add all to canvas
-    canvas.add(topOverlay);
-    canvas.add(bottomOverlay);
-    canvas.add(leftOverlay);
-    canvas.add(rightOverlay);
-    canvas.add(bleedRect);
+    }));
 
     // Keep them on top so bleed areas are always visible
-    bringBleedAreasToFront();
+    bringBleedObjectsToFront();
 }
 
 /**
@@ -298,16 +279,16 @@ function createRulers() {
 /**
  * Bring bleed area overlays to front
  */
-function bringBleedAreasToFront() {
-    bleedOverlays.forEach(overlay => {
-        if (overlay && canvas.contains(overlay)) {
-            canvas.bringToFront(overlay);
-        }
-    });
-    if (bleedRect && canvas.contains(bleedRect)) {
-        canvas.bringToFront(bleedRect);
-    }
+function bringBleedObjectsToFront() {
+    if (isRestoring) return;
+
+    canvas.getObjects()
+        .filter(obj => isBleedObject(obj))
+        .forEach(obj => {
+            canvas.bringObjectToFront(obj);
+        });
 }
+
 
 /**
  * Setup all event listeners
@@ -389,51 +370,52 @@ function loadImage(file) {
     };
 
     reader.onload = function (event) {
-        fabric.Image.fromURL(event.target.result, function (img) {
-            if (!img || !img.width || !img.height) {
-                console.error('Invalid image:', file.name);
-                alert('Invalid image file. Please try a different file.');
-                return;
-            }
-            // Scale image to fit reasonably on canvas (max 30% of canvas width)
-            const maxWidth = canvas.width * 0.3;
-            const maxHeight = canvas.height * 0.3;
+        fabric.Image.fromURL(event.target.result)
+            .then(function (img) {
+                if (!img || !img.width || !img.height) {
+                    console.error('Invalid image:', file.name);
+                    alert('Invalid image file. Please try a different file.');
+                    return;
+                }
+                // Scale image to fit reasonably on canvas (max 30% of canvas width)
+                const maxWidth = canvas.width * 0.3;
+                const maxHeight = canvas.height * 0.3;
 
-            if (img.width > maxWidth || img.height > maxHeight) {
-                const scale = Math.min(maxWidth / img.width, maxHeight / img.height);
-                img.scale(scale);
-            }
+                if (img.width > maxWidth || img.height > maxHeight) {
+                    const scale = Math.min(maxWidth / img.width, maxHeight / img.height);
+                    img.scale(scale);
+                }
 
-            // Calculate offset based on upload count to avoid stacking images
-            // Start at top-left corner inside bleed area
-            // Vertical offset cycles every 10 images, horizontal keeps growing
-            const verticalOffset = (imageUploadCount % 10) * 50;
-            const horizontalOffset = Math.floor(imageUploadCount / 10) * 100 + (imageUploadCount % 10) * 50;
-            imageUploadCount++;
+                // Calculate offset based on upload count to avoid stacking images
+                // Start at top-left corner inside bleed area
+                // Vertical offset cycles every 10 images, horizontal keeps growing
+                const verticalOffset = (imageUploadCount % 10) * 50;
+                const horizontalOffset = Math.floor(imageUploadCount / 10) * 100 + (imageUploadCount % 10) * 50;
+                imageUploadCount++;
 
-            // Calculate starting position accounting for image size
-            // Use top-left origin and add padding from bleed area plus half the scaled image size
-            const scaledWidth = img.width * img.scaleX;
-            const scaledHeight = img.height * img.scaleY;
-            const startX = BLEED_PIXELS + scaledWidth / 2 + 20; // 20px padding from bleed edge
-            const startY = BLEED_PIXELS + scaledHeight / 2 + 20;
+                // Calculate starting position accounting for image size
+                // Use top-left origin and add padding from bleed area plus half the scaled image size
+                const scaledWidth = img.width * img.scaleX;
+                const scaledHeight = img.height * img.scaleY;
+                const startX = BLEED_PIXELS + scaledWidth / 2 + 20; // 20px padding from bleed edge
+                const startY = BLEED_PIXELS + scaledHeight / 2 + 20;
 
-            // Position the image starting from top-left with offset
-            img.set({
-                left: startX + horizontalOffset,
-                top: startY + verticalOffset,
-                originX: 'center',
-                originY: 'center'
+                // Position the image starting from top-left with offset
+                img.set({
+                    left: startX + horizontalOffset,
+                    top: startY + verticalOffset,
+                    originX: 'center',
+                    originY: 'center'
+                });
+
+                // Add to canvas
+                canvas.add(img);
+                canvas.setActiveObject(img);
+                canvas.renderAll();
+                updateToolbarState();
+            }, {
+                crossOrigin: 'anonymous'
             });
-
-            // Add to canvas
-            canvas.add(img);
-            canvas.setActiveObject(img);
-            canvas.renderAll();
-            updateToolbarState();
-        }, {
-            crossOrigin: 'anonymous'
-        });
     };
 
     reader.readAsDataURL(file);
@@ -470,51 +452,53 @@ function handleDrop(e) {
  */
 function duplicateSelected() {
     const activeObject = canvas.getActiveObject();
-    if (!activeObject || activeObject === bleedRect) return;
+    if (!activeObject || isBleedObject(activeObject)) return;
 
-    // Handle multiple selection (ActiveSelection)
-    if (activeObject.type === 'activeSelection') {
-        const objects = activeObject.getObjects();
+    // Handle multiple selection (activeselection)
+    if (activeObject.type === 'activeselection') {
+        const objects = activeObject.getObjects().filter(obj => !isBleedObject(obj));   // Exclude bleed objects even though they shouldn't be selectable
         const clonedObjects = [];
 
         // Clone each object individually
         let completed = 0;
         objects.forEach((obj) => {
-            obj.clone((cloned) => {
-                // Get the absolute position on canvas (accounting for group transformation)
-                const absLeft = obj.left + activeObject.left + activeObject.width / 2;
-                const absTop = obj.top + activeObject.top + activeObject.height / 2;
+            obj.clone()
+                .then((cloned) => {
+                    // Get the absolute position on canvas (accounting for group transformation)
+                    const absLeft = obj.left + activeObject.left + activeObject.width / 2;
+                    const absTop = obj.top + activeObject.top + activeObject.height / 2;
 
-                cloned.set({
-                    left: absLeft + DUPLICATION_OFFSET,
-                    top: absTop + DUPLICATION_OFFSET
-                });
-                canvas.add(cloned);
-                clonedObjects.push(cloned);
-                completed++;
-
-                // When all objects are cloned, select them
-                if (completed === objects.length) {
-                    canvas.discardActiveObject();
-                    const sel = new fabric.ActiveSelection(clonedObjects, {
-                        canvas: canvas
+                    cloned.set({
+                        left: absLeft + DUPLICATION_OFFSET,
+                        top: absTop + DUPLICATION_OFFSET
                     });
-                    canvas.setActiveObject(sel);
-                    canvas.requestRenderAll();
-                }
-            });
+                    canvas.add(cloned);
+                    clonedObjects.push(cloned);
+                    completed++;
+
+                    // When all objects are cloned, select them
+                    if (completed === objects.length) {
+                        canvas.discardActiveObject();
+                        const sel = new fabric.ActiveSelection(clonedObjects, {
+                            canvas: canvas
+                        });
+                        canvas.setActiveObject(sel);
+                        canvas.requestRenderAll();
+                    }
+                });
         });
     } else {
         // Handle single object
-        activeObject.clone((cloned) => {
-            cloned.set({
-                left: cloned.left + DUPLICATION_OFFSET,
-                top: cloned.top + DUPLICATION_OFFSET
+        activeObject.clone()
+            .then((cloned) => {
+                cloned.set({
+                    left: cloned.left + DUPLICATION_OFFSET,
+                    top: cloned.top + DUPLICATION_OFFSET
+                });
+                canvas.add(cloned);
+                canvas.setActiveObject(cloned);
+                canvas.requestRenderAll();
             });
-            canvas.add(cloned);
-            canvas.setActiveObject(cloned);
-            canvas.requestRenderAll();
-        });
     }
 }
 
@@ -523,10 +507,10 @@ function duplicateSelected() {
  */
 function deleteSelected() {
     const activeObject = canvas.getActiveObject();
-    if (!activeObject || activeObject === bleedRect) return;
+    if (!activeObject || isBleedObject(activeObject)) return;
 
-    // Handle multiple selection (ActiveSelection)
-    if (activeObject.type === 'activeSelection') {
+    // Handle multiple selection (activeselection)
+    if (activeObject.type === 'activeselection') {
         const objects = activeObject.getObjects().slice(); // Create a copy of the array
         canvas.discardActiveObject(); // Deselect first
 
@@ -583,7 +567,7 @@ function deselectAll() {
  */
 function bringForward() {
     const activeObject = canvas.getActiveObject();
-    if (!activeObject || activeObject === bleedRect) return;
+    if (!activeObject || isBleedObject(activeObject)) return;
 
     canvas.bringForward(activeObject);
     canvas.renderAll();
@@ -594,12 +578,12 @@ function bringForward() {
  */
 function sendBackward() {
     const activeObject = canvas.getActiveObject();
-    if (!activeObject || activeObject === bleedRect) return;
+    if (!activeObject || isBleedObject(activeObject)) return;
 
     canvas.sendBackwards(activeObject);
 
     // Ensure bleed areas stay on top
-    bringBleedAreasToFront();
+    bringBleedObjectsToFront();
     canvas.renderAll();
 }
 
@@ -707,7 +691,7 @@ function fillSheet() {
     if (copiesX < 1 || copiesY < 1) {
         isRestoring = false;
         alert('Design is too large to fit multiple copies!');
-        canvas.renderAll();
+        canvas.requestRenderAll();
         return;
     }
 
@@ -725,27 +709,26 @@ function fillSheet() {
 
             // Clone each object in the group
             userObjects.forEach(obj => {
-                obj.clone(cloned => {
-                    // Position clone based on the original position plus cell offset
-                    cloned.set({
-                        left: obj.left + cellOffsetX,
-                        top: obj.top + cellOffsetY
+                obj.clone()
+                    .then(cloned => {
+                        // Position clone based on the original position plus cell offset
+                        cloned.set({
+                            left: obj.left + cellOffsetX,
+                            top: obj.top + cellOffsetY
+                        });
+                        canvas.add(cloned);
+                        allCopies.push(cloned);
                     });
-
-                    canvas.add(cloned);
-                    allCopies.push(cloned);
-                });
             });
         }
     }
 
     // Ensure bleed areas stay on top and save state once
     setTimeout(() => {
-        bringBleedAreasToFront();
-        canvas.renderAll();
-
+        canvas.requestRenderAll();
         // Re-enable state saving and save the entire fill operation as one state
         isRestoring = false;
+        bringBleedObjectsToFront();
         saveState();
     }, 100);
 }
@@ -756,41 +739,58 @@ function fillSheet() {
 function exportToPNG() {
     if (!canvas) return;
 
-    // Temporarily set bleed overlays opacity to 1 to hide whats behind them 
-    bleedOverlays.forEach(overlay => {
-        if (overlay) overlay.set('opacity', 1);
-    });
-    // Ensure bleed rectangle is not visible though
-    if (bleedRect) bleedRect.set('opacity', 0);
+    // Make bleed overlays fully visible for export to hide overflowing objects
+    canvas.getObjects()
+        .filter(obj => obj.name === 'bleedOverlay')
+        .forEach(overlay => {
+            overlay.set('opacity', 1);
+        });
+    // Hide bleed area rectangle
+    canvas.getObjects()
+        .filter(obj => obj.name === 'bleedArea')
+        .forEach(rect => {
+            rect.set('opacity', 0);
+        });
+
 
     // Mirror the canvas horizontally
     canvas.getObjects().forEach(obj => {
-        if (obj.name !== 'bleedOverlay' && obj.name !== 'bleedArea') {
+        if (!isBleedObject(obj)) {
             obj.set('flipX', !obj.flipX);
         }
     });
 
+    // Force canvas background to white before export (defensive)
+    canvas.backgroundColor = '#ffffff';
     canvas.renderAll();
 
     // Export canvas as PNG at full resolution (300 DPI)
     const dataURL = canvas.toDataURL({
         format: 'png',
         quality: 1,
-        multiplier: 1 / canvas.getZoom() // Scale back to original 300 DPI resolution
+        multiplier: 1 / canvas.getZoom(), // Scale back to original 300 DPI resolution
+        enableRetinaScaling: false,
+        backgroundColor: '#ffffff' // Explicitly set white background
     });
 
     // Restore objects to original state (un-mirror)
     canvas.getObjects().forEach(obj => {
-        if (obj.name !== 'bleedOverlay' && obj.name !== 'bleedArea') {
+        if (!isBleedObject(obj)) {
             obj.set('flipX', !obj.flipX);
         }
     });
 
-    // Restore bleed overlays
-    bleedOverlays.forEach(overlay => {
-        if (overlay) overlay.set('opacity', BLEED_OPACITY);
-    });
-    if (bleedRect) bleedRect.set('opacity', 1);
+    // Restore bleed overlays and area visibility
+    canvas.getObjects()
+        .filter(obj => obj.name === 'bleedOverlay')
+        .forEach(overlay => {
+            overlay.set('opacity', BLEED_OPACITY);
+        });
+    canvas.getObjects()
+        .filter(obj => obj.name === 'bleedArea')
+        .forEach(rect => {
+            rect.set('opacity', 1);
+        });
     canvas.renderAll();
 
     // Create download link
@@ -811,7 +811,7 @@ function saveState() {
     clearTimeout(saveStateTimeout);
     saveStateTimeout = setTimeout(() => {
         saveStateImmediate();
-    }, 100);
+    }, 250);
 }
 
 /**
@@ -823,10 +823,11 @@ function saveStateImmediate() {
     // Filter out bleed overlays before saving
     const objectsToSave = getUserObjects();
 
-    // Create a temporary canvas state with only user objects
+    // Create a temporary canvas state with only user objects 
+    // bleed overlays will be re-added on restore
     const stateData = {
         version: canvas.version,
-        objects: objectsToSave.map(obj => obj.toJSON(['name']))
+        objects: objectsToSave.map(obj => obj.toJSON(['name'])),
     };
     const state = JSON.stringify(stateData);
 
@@ -852,20 +853,18 @@ function saveStateImmediate() {
 function restoreState(state) {
     isRestoring = true;
 
-    // Remove only user objects (keep bleed overlays)
-    const userObjects = getUserObjects();
-    userObjects.forEach(obj => canvas.remove(obj));
-
-    // Load the saved state (which contains only user objects)
-    canvas.loadFromJSON(state, function () {
-        // Ensure bleed overlays stay on top
-        bringBleedAreasToFront();
-
-        canvas.requestRenderAll();
-        isRestoring = false;
-        updateToolbarState();
-        updateUndoRedoButtons();
-    });
+    // Load the saved state 
+    // State contains only user objects since the special properties of the bleed areas 
+    // (like their name and not being selectable) do not survive JSON serialization well, 
+    // so we re-add them after loading (also needed because loadFromJSON replaces all objects)
+    canvas.loadFromJSON(state)
+        .then((canvas) => {
+            createBleedArea();
+            canvas.requestRenderAll();
+            isRestoring = false;
+            updateToolbarState();
+            updateUndoRedoButtons();
+        });
 }
 
 /**
@@ -913,7 +912,7 @@ function updateUndoRedoButtons() {
  */
 function updateToolbarState() {
     const activeObject = canvas.getActiveObject();
-    const hasSelection = activeObject && activeObject !== bleedRect;
+    const hasSelection = activeObject && !isBleedObject(activeObject);
 
     const deselectBtn = document.getElementById('deselect-btn');
     const duplicateBtn = document.getElementById('duplicate-btn');
@@ -986,7 +985,7 @@ document.addEventListener('DOMContentLoaded', function () {
     console.log('LikeInk Designer initializing');
     initCanvas();
     initUploadDialog();
-    
+
     // Show upload dialog after canvas is ready
     setTimeout(() => {
         showUploadDialog();
@@ -1017,37 +1016,98 @@ function initUploadDialog() {
     const sizeValue = document.getElementById('size-value');
     const fillSheetDialogBtn = document.getElementById('fill-sheet-dialog-btn');
     const addMoreBtn = document.getElementById('add-more-btn');
-    
+    const closeDialogBtn = document.getElementById('close-dialog-btn');
+    const openUploadDialogBtn = document.getElementById('open-upload-dialog-btn');
+
+    // Content type switching
+    const imageModeBtn = document.getElementById('image-mode-btn');
+    const textModeBtn = document.getElementById('text-mode-btn');
+    const imageSection = document.getElementById('image-section');
+    const textSection = document.getElementById('text-section');
+
+    // Text mode elements
+    const textInput = document.getElementById('text-input');
+    const textSizeSlider = document.getElementById('text-size-slider');
+    const textSizeValue = document.getElementById('text-size-value');
+    const fillSheetTextBtn = document.getElementById('fill-sheet-text-btn');
+    const addTextBtn = document.getElementById('add-text-btn');
+
+    // Mode switching
+    if (imageModeBtn && textModeBtn && imageSection && textSection) {
+        imageModeBtn.addEventListener('click', () => {
+            imageModeBtn.classList.add('active');
+            textModeBtn.classList.remove('active');
+            imageSection.classList.add('active');
+            textSection.classList.remove('active');
+        });
+
+        textModeBtn.addEventListener('click', () => {
+            textModeBtn.classList.add('active');
+            imageModeBtn.classList.remove('active');
+            textSection.classList.add('active');
+            imageSection.classList.remove('active');
+        });
+    }
+
+    // Text size slider
+    if (textSizeSlider && textSizeValue) {
+        textSizeSlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            textSizeValue.textContent = value;
+            updateTextWidth();
+        });
+    }
+
+    // Update text width when user types
+    if (textInput) {
+        textInput.addEventListener('input', () => {
+            updateTextWidth();
+        });
+    }
+
+    // Text buttons
+    if (fillSheetTextBtn) {
+        fillSheetTextBtn.addEventListener('click', () => {
+            addTextFromDialog(true); // true = fill sheet
+        });
+    }
+
+    if (addTextBtn) {
+        addTextBtn.addEventListener('click', () => {
+            addTextFromDialog(false); // false = just add one
+        });
+    }
+
     // Click to upload
     uploadZone.addEventListener('click', () => {
         dialogFileUpload.click();
     });
-    
+
     // File selection
     dialogFileUpload.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             handleDialogFileSelect(e.target.files[0]);
         }
     });
-    
+
     // Drag and drop on upload zone
     uploadZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
         uploadZone.classList.add('drag-over');
     });
-    
+
     uploadZone.addEventListener('dragleave', (e) => {
         e.preventDefault();
         e.stopPropagation();
         uploadZone.classList.remove('drag-over');
     });
-    
+
     uploadZone.addEventListener('drop', (e) => {
         e.preventDefault();
         e.stopPropagation();
         uploadZone.classList.remove('drag-over');
-        
+
         if (e.dataTransfer.files.length > 0) {
             const file = e.dataTransfer.files[0];
             if (file.type.match('image.*')) {
@@ -1055,24 +1115,52 @@ function initUploadDialog() {
             }
         }
     });
-    
+
     // Size slider
     sizeSlider.addEventListener('input', (e) => {
         const value = e.target.value;
         sizeValue.textContent = parseFloat(value).toFixed(1);
     });
-    
+
     // Update slider range based on orientation
     updateSliderRange();
-    
+
     // Fill sheet button
     fillSheetDialogBtn.addEventListener('click', () => {
         addImageFromDialog(true); // true = fill sheet
     });
-    
+
     // Add more button
     addMoreBtn.addEventListener('click', () => {
         addImageFromDialog(false); // false = just add one
+    });
+
+    // Close dialog button
+    if (closeDialogBtn) {
+        closeDialogBtn.addEventListener('click', () => {
+            hideUploadDialog();
+        });
+    }
+
+    // Click outside dialog to close
+    uploadDialog.addEventListener('click', (e) => {
+        if (e.target === uploadDialog) {
+            hideUploadDialog();
+        }
+    });
+
+    // Open upload dialog button in toolbar
+    if (openUploadDialogBtn) {
+        openUploadDialogBtn.addEventListener('click', () => {
+            showUploadDialog();
+        });
+    }
+
+    // ESC key to close dialog
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && uploadDialog && uploadDialog.classList.contains('show')) {
+            hideUploadDialog();
+        }
     });
 }
 
@@ -1082,17 +1170,17 @@ function initUploadDialog() {
 function updateSliderRange() {
     const sizeSlider = document.getElementById('size-slider');
     const isWindowLandscape = window.innerWidth > window.innerHeight;
-    
+
     // Max width in cm: 21cm for landscape, 15cm for portrait
     const maxCm = isWindowLandscape ? 21 : 15;
     const minCm = 1;
-    
+
     sizeSlider.min = minCm;
     sizeSlider.max = maxCm;
     sizeSlider.step = 0.5;
-    
-    // Set default to middle value
-    const defaultValue = ((minCm + maxCm) / 3).toFixed(1);
+
+    // Set default to one third of the max size
+    const defaultValue = Math.round(((minCm + maxCm) / 3).toFixed(1));
     sizeSlider.value = defaultValue;
     document.getElementById('size-value').textContent = defaultValue;
 }
@@ -1105,20 +1193,20 @@ function handleDialogFileSelect(file) {
         alert('Please select an image file.');
         return;
     }
-    
+
     currentImageFile = file;
     const reader = new FileReader();
-    
+
     reader.onerror = function () {
         console.error('Failed to read file:', file.name);
         alert('Failed to load image. Please try again.');
     };
-    
+
     reader.onload = function (event) {
         currentImageData = event.target.result;
         showPreview(event.target.result);
     };
-    
+
     reader.readAsDataURL(file);
 }
 
@@ -1129,7 +1217,7 @@ function showPreview(imageData) {
     const uploadZone = document.getElementById('upload-zone');
     const previewSection = document.getElementById('preview-section');
     const previewImage = document.getElementById('preview-image');
-    
+
     previewImage.src = imageData;
     uploadZone.style.display = 'none';
     previewSection.style.display = 'block';
@@ -1140,56 +1228,57 @@ function showPreview(imageData) {
  */
 function addImageFromDialog(shouldFillSheet = false) {
     if (!currentImageData) return;
-    
+
     const sizeSlider = document.getElementById('size-slider');
     const targetWidthCm = parseFloat(sizeSlider.value); // Get value in cm
     const targetWidthMm = targetWidthCm * 10; // Convert cm to mm
     const targetWidthPx = targetWidthMm * MM_TO_PIXELS; // Convert mm to pixels at 300 DPI
-    
-    fabric.Image.fromURL(currentImageData, function (img) {
-        if (!img || !img.width || !img.height) {
-            alert('Invalid image file. Please try a different file.');
-            return;
-        }
-        
-        // Scale image to target width in virtual space (300 DPI)
-        const scale = targetWidthPx / img.width;
-        img.scale(scale);
-        
-        // Position at center of canvas in virtual coordinates
-        const virtualWidth = canvas.width / canvas.getZoom();
-        const virtualHeight = canvas.height / canvas.getZoom();
-        const safeAreaCenterX = virtualWidth / 2;
-        const safeAreaCenterY = virtualHeight / 2;
-        
-        img.set({
-            left: safeAreaCenterX,
-            top: safeAreaCenterY,
-            originX: 'center',
-            originY: 'center'
+
+    fabric.Image.fromURL(currentImageData)
+        .then((img) => {
+            if (!img || !img.width || !img.height) {
+                alert('Invalid image file. Please try a different file.');
+                return;
+            }
+
+            // Scale image to target width in virtual space (300 DPI)
+            const scale = targetWidthPx / img.width;
+            img.scale(scale);
+
+            // Position at center of canvas in virtual coordinates
+            const virtualWidth = canvas.width / canvas.getZoom();
+            const virtualHeight = canvas.height / canvas.getZoom();
+            const safeAreaCenterX = virtualWidth / 2;
+            const safeAreaCenterY = virtualHeight / 2;
+
+            img.set({
+                left: safeAreaCenterX,
+                top: safeAreaCenterY,
+                originX: 'center',
+                originY: 'center'
+            });
+
+            // Add to canvas
+            canvas.add(img);
+            canvas.setActiveObject(img);
+            canvas.renderAll();
+            updateToolbarState();
+
+            if (shouldFillSheet) {
+                // Hide dialog first
+                hideUploadDialog();
+
+                // Fill sheet after a brief delay to let the image be added
+                setTimeout(() => {
+                    fillSheet();
+                }, 100);
+            } else {
+                // Reset dialog for next image
+                resetDialogForNextImage();
+            }
+        }, {
+            crossOrigin: 'anonymous'
         });
-        
-        // Add to canvas
-        canvas.add(img);
-        canvas.setActiveObject(img);
-        canvas.renderAll();
-        updateToolbarState();
-        
-        if (shouldFillSheet) {
-            // Hide dialog first
-            hideUploadDialog();
-            
-            // Fill sheet after a brief delay to let the image be added
-            setTimeout(() => {
-                fillSheet();
-            }, 100);
-        } else {
-            // Reset dialog for next image
-            resetDialogForNextImage();
-        }
-    }, {
-        crossOrigin: 'anonymous'
-    });
 }
 
 /**
@@ -1199,18 +1288,135 @@ function resetDialogForNextImage() {
     const uploadZone = document.getElementById('upload-zone');
     const previewSection = document.getElementById('preview-section');
     const dialogFileUpload = document.getElementById('dialog-file-upload');
-    
+
     // Reset state
     currentImageData = null;
     currentImageFile = null;
     dialogFileUpload.value = '';
-    
+
     // Reset UI
     uploadZone.style.display = 'block';
     previewSection.style.display = 'none';
-    
+
     // Update slider range in case orientation changed
     updateSliderRange();
+}
+
+/**
+ * Add text from dialog
+ * @param {boolean} shouldFillSheet - Whether to fill sheet after adding
+ */
+function addTextFromDialog(shouldFillSheet) {
+    const textInput = document.getElementById('text-input');
+    const textSizeSlider = document.getElementById('text-size-slider');
+
+    const textContent = textInput.value.trim();
+    if (!textContent) {
+        alert('Please enter some text.');
+        return;
+    }
+
+    const fontSize = parseInt(textSizeSlider.value, 10);
+
+    // Get virtual canvas dimensions
+    const virtualWidth = canvas.width / canvas.getZoom();
+    const virtualHeight = canvas.height / canvas.getZoom();
+    const safeAreaCenterX = virtualWidth / 2;
+    const safeAreaCenterY = virtualHeight / 2;
+
+    // Create text object
+    const text = new fabric.Text(textContent, {
+        left: safeAreaCenterX,
+        top: safeAreaCenterY,
+        originX: 'center',
+        originY: 'center',
+        fontSize: fontSize,
+        fill: '#000000',
+        fontFamily: 'Arial'
+    });
+
+    // Add to canvas
+    canvas.add(text);
+    canvas.setActiveObject(text);
+    canvas.renderAll();
+    updateToolbarState();
+
+    if (shouldFillSheet) {
+        // Hide dialog first
+        hideUploadDialog();
+
+        // Fill sheet after a brief delay to let the text be added
+        setTimeout(() => {
+            fillSheet();
+        }, 100);
+    } else {
+        // Reset dialog for next text
+        resetDialogForNextText();
+    }
+}
+
+/**
+ * Reset dialog for adding another text
+ */
+function resetDialogForNextText() {
+    const textInput = document.getElementById('text-input');
+
+    // Clear text input (keep size setting)
+    textInput.value = '';
+    textInput.focus();
+    updateTextWidth();
+}
+
+/**
+ * Calculate and display text width in millimeters
+ */
+function updateTextWidth() {
+    const textInput = document.getElementById('text-input');
+    const textSizeSlider = document.getElementById('text-size-slider');
+    const textSizeValue = document.getElementById('text-size-value');
+    const textSizeControl = document.querySelector('.text-size-control');
+    const textSizeWarning = document.getElementById('text-size-warning');
+
+    if (!textInput || !textSizeSlider || !textSizeValue) return;
+
+    const textContent = textInput.value.trim();
+    if (!textContent) {
+        textSizeValue.textContent = '—';
+        if (textSizeControl) textSizeControl.classList.remove('warning');
+        if (textSizeWarning) textSizeWarning.style.display = 'none';
+        return;
+    }
+
+    const fontSize = parseInt(textSizeSlider.value, 10);
+
+    // Create a temporary text object to measure dimensions
+    const tempText = new fabric.Text(textContent, {
+        fontSize: fontSize,
+        fontFamily: 'Arial'
+    });
+
+    // Get width in pixels (virtual canvas coordinates)
+    const widthPx = tempText.width;
+    const widthMm = widthPx / MM_TO_PIXELS; // Convert pixels to mm
+    const widthCm = widthMm / 10;
+
+    textSizeValue.textContent = widthCm.toFixed(1);
+
+    // Check if text exceeds safe area (canvas width minus 2x bleed of 5mm each)
+    // Determine canvas width based on current orientation
+    const canvasWidthMm = canvas.width > canvas.height ? A5_LONG_SIDE_MM : A5_SHORT_SIDE_MM
+    const safeAreaWidthMm = canvasWidthMm - (2 * BLEED_MM); // minus 10mm total bleed
+    const safeAreaWidthCm = safeAreaWidthMm / 10;
+
+    if (widthCm > safeAreaWidthCm) {
+        // Text is too wide - show warning
+        if (textSizeControl) textSizeControl.classList.add('warning');
+        if (textSizeWarning) textSizeWarning.style.display = 'block';
+    } else {
+        // Text fits - hide warning
+        if (textSizeControl) textSizeControl.classList.remove('warning');
+        if (textSizeWarning) textSizeWarning.style.display = 'none';
+    }
 }
 
 /**
