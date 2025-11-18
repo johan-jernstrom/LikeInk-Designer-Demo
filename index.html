@@ -107,6 +107,43 @@
         </div>
     </div>
 
+    <!-- Upload Dialog -->
+    <div id="upload-dialog" class="upload-dialog">
+        <div class="upload-dialog-content">
+            <h2>Add Image to Sheet</h2>
+            
+            <!-- Upload Zone -->
+            <div id="upload-zone" class="upload-zone">
+                <div class="upload-zone-content">
+                    <div class="upload-icon">📁</div>
+                    <p class="upload-text">Click to upload or drag & drop an image</p>
+                    <p class="upload-hint">Supports PNG, JPG, SVG</p>
+                    <input type="file" id="dialog-file-upload" accept="image/*" style="display: none;">
+                </div>
+            </div>
+
+            <!-- Preview Section (hidden by default) -->
+            <div id="preview-section" class="preview-section" style="display: none;">
+                <div class="preview-container">
+                    <img id="preview-image" src="" alt="Preview">
+                </div>
+                
+                <div class="size-control">
+                    <label for="size-slider">Image Width: <span id="size-value">10</span> cm</label>
+                    <input type="range" id="size-slider" min="10" max="210" value="100" step="10">
+                </div>
+
+                <div class="dialog-question">
+                    <p>Do you want to add more designs to the sheet?</p>
+                    <div class="dialog-buttons">
+                        <button id="fill-sheet-dialog-btn" class="btn btn-primary">No, fill sheet with this one</button>
+                        <button id="add-more-btn" class="btn btn-secondary">Yes, let me add more images</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Load Fabric.js from CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
     <script src="js/designer.js"></script>
