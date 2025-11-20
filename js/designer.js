@@ -1,10 +1,10 @@
 /**
  * LikeInk Designer - Custom Tattoo Sheet Designer
- * A5 Landscape with 5mm bleed area
+ * A5 sheet with 5mm bleed area
  */
 
 // Physical dimensions
-// A5 in landscape: 210mm × 148mm at 300 DPI
+// A5 sheet: 210mm × 148mm at 300 DPI
 const A5_LONG_SIDE_MM = 210;
 const A5_SHORT_SIDE_MM = 148;
 const BLEED_MM = 5;
@@ -15,16 +15,55 @@ const MM_TO_PIXELS = 300 / 25.4; // 300 DPI conversion
 const BLEED_PIXELS = Math.round(BLEED_MM * MM_TO_PIXELS); // ~59 pixels
 const BLEED_OPACITY = 0.95; // Opacity for bleed overlays
 const DUPLICATION_OFFSET = 50; // Offset in pixels when duplicating objects
+const PLACEMENT_PADDING = 20; // Extra padding inside bleed edge for auto-placement
+const PLACEMENT_GUTTER = 12; // Minimum gap to keep between placed objects
+const SVG_API_BASE_URL = 'https://api.svgapi.com/v1';
+const SVG_API_DOMAIN_KEY = window.svgApiDomainKey || 'Ty5WcDa63E'; // Public demo key
+const SYMBOLS_PAGE_SIZE = 18; // SVG API limit is 20
 
 // Canvas default dimensions at 300 DPI
 let canvas;
 let bleedOverlays = [];
-let imageUploadCount = 0; // Counter to offset new uploads
+let textMeasurementHelper = null; // Reused Fabric text instance for measurements
+let lastOrientationIsLandscape = null; // Track orientation to trigger reflow on change
 
 // Upload dialog state
 let uploadDialog;
 let currentImageData = null; // Store current image data for the dialog
 let currentImageFile = null; // Store current file
+let activeDialogMode = 'image';
+
+// Symbols tab state
+const symbolUI = {
+    searchInput: null,
+    searchButton: null,
+    loading: null,
+    resultsGrid: null,
+    emptyState: null,
+    pagination: null,
+    prevButton: null,
+    nextButton: null,
+    pageInfo: null,
+    selectionPanel: null,
+    preview: null,
+    title: null,
+    tags: null,
+    addButton: null,
+    fillButton: null,
+    domainWarning: null
+};
+
+let symbolSearchState = {
+    query: '',
+    start: 0,
+    limit: SYMBOLS_PAGE_SIZE,
+    prevStack: [],
+    nextStart: null,
+    total: null,
+    results: [],
+    selectedIndex: null
+};
+let symbolSearchController = null;
 
 // Undo/Redo history management
 let undoStack = [];
@@ -65,6 +104,8 @@ function scaleCanvas() {
 
     // Calculate virtual canvas size in mm and pixels (A5 size)
     const isWindowLandscape = window.innerWidth > window.innerHeight;
+    const orientationChanged = lastOrientationIsLandscape !== null && lastOrientationIsLandscape !== isWindowLandscape;
+    lastOrientationIsLandscape = isWindowLandscape;
     const canvas_virtual_width_mm = isWindowLandscape ? A5_LONG_SIDE_MM : A5_SHORT_SIDE_MM;
     const canvas_virtual_height_mm = isWindowLandscape ? A5_SHORT_SIDE_MM : A5_LONG_SIDE_MM;
     const canvas_virtual_width_px = canvas_virtual_width_mm * MM_TO_PIXELS;
@@ -77,13 +118,15 @@ function scaleCanvas() {
     // Update canvas dimensions
     const newWidth = Math.round(canvas_virtual_width_px * canvasScale);
     const newHeight = Math.round(canvas_virtual_height_px * canvasScale);
+    const sizeChanged = Math.abs(canvas.width - newWidth) >= 10 || Math.abs(canvas.height - newHeight) >= 10;
 
-    // if size has not changed significantly, skip
-    if (Math.abs(canvas.width - newWidth) < 10 && Math.abs(canvas.height - newHeight) < 10) {
+    if (!sizeChanged && !orientationChanged) {
         return;
     }
 
-    canvas.setDimensions({ width: newWidth, height: newHeight });
+    if (sizeChanged) {
+        canvas.setDimensions({ width: newWidth, height: newHeight });
+    }
     canvas.setZoom(canvasScale);
 
     // Recreate rulers
@@ -95,6 +138,11 @@ function scaleCanvas() {
     canvas.renderAll();
 
     console.log(`Canvas scaled to: ${newWidth}x${newHeight} pixels at ${Math.round(canvasScale * 100)}%`);
+
+    if (orientationChanged) {
+        console.log('Orientation changed, reflowing objects into safe area.');
+        reflowObjectsIntoSafeArea();
+    }
 }
 
 /**
@@ -342,17 +390,26 @@ function setupEventListeners() {
 }
 
 /**
+ * Common helper to process lists of image files
+ */
+function processImageFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+
+    Array.from(fileList).forEach(file => {
+        if (file.type && file.type.match('image.*')) {
+            loadImage(file);
+        }
+    });
+}
+
+/**
  * Handle file upload from input
  */
 function handleFileUpload(e) {
     const files = e.target.files;
-    if (files.length === 0) return;
+    if (!files || files.length === 0) return;
 
-    Array.from(files).forEach(file => {
-        if (file.type.match('image.*')) {
-            loadImage(file);
-        }
-    });
+    processImageFiles(files);
 
     // Reset file input
     e.target.value = '';
@@ -377,6 +434,7 @@ function loadImage(file) {
                     alert('Invalid image file. Please try a different file.');
                     return;
                 }
+
                 // Scale image to fit reasonably on canvas (max 30% of canvas width)
                 const maxWidth = canvas.width * 0.3;
                 const maxHeight = canvas.height * 0.3;
@@ -386,30 +444,10 @@ function loadImage(file) {
                     img.scale(scale);
                 }
 
-                // Calculate offset based on upload count to avoid stacking images
-                // Start at top-left corner inside bleed area
-                // Vertical offset cycles every 10 images, horizontal keeps growing
-                const verticalOffset = (imageUploadCount % 10) * 50;
-                const horizontalOffset = Math.floor(imageUploadCount / 10) * 100 + (imageUploadCount % 10) * 50;
-                imageUploadCount++;
-
-                // Calculate starting position accounting for image size
-                // Use top-left origin and add padding from bleed area plus half the scaled image size
-                const scaledWidth = img.width * img.scaleX;
-                const scaledHeight = img.height * img.scaleY;
-                const startX = BLEED_PIXELS + scaledWidth / 2 + 20; // 20px padding from bleed edge
-                const startY = BLEED_PIXELS + scaledHeight / 2 + 20;
-
-                // Position the image starting from top-left with offset
-                img.set({
-                    left: startX + horizontalOffset,
-                    top: startY + verticalOffset,
-                    originX: 'center',
-                    originY: 'center'
-                });
-
                 // Add to canvas
                 canvas.add(img);
+                arrangeObjectOnCanvas(img);
+
                 canvas.setActiveObject(img);
                 canvas.renderAll();
                 updateToolbarState();
@@ -419,6 +457,231 @@ function loadImage(file) {
     };
 
     reader.readAsDataURL(file);
+}
+
+/** Arrange newly added object on canvas to avoid overlapping existing objects
+ * Aims to place the object within the safe area (inside bleed edges) while avoiding overlaps
+ * similar to a simple bin-packing algorithm. Prioritizes top-left placement.
+ * @param {fabric.Object} objToArrange - The Fabric.js object to arrange on canvas
+*/
+function arrangeObjectOnCanvas(objToArrange) {
+    if (!canvas || !objToArrange) return false;
+
+    const zoom = canvas.getZoom() || 1;
+    const virtualWidth = canvas.width / zoom;
+    const virtualHeight = canvas.height / zoom;
+
+    const safeRect = {
+        left: BLEED_PIXELS + PLACEMENT_PADDING,
+        top: BLEED_PIXELS + PLACEMENT_PADDING,
+        right: virtualWidth - BLEED_PIXELS - PLACEMENT_PADDING,
+        bottom: virtualHeight - BLEED_PIXELS - PLACEMENT_PADDING
+    };
+
+    // If safe area is invalid, place at center of canvas and return early
+    if (safeRect.right <= safeRect.left || safeRect.bottom <= safeRect.top) {
+        objToArrange.set({ left: virtualWidth / 2, top: virtualHeight / 2, originX: 'center', originY: 'center' });
+        objToArrange.setCoords();
+        return false;
+    }
+
+    const targetWidth = objToArrange.getScaledWidth();
+    const targetHeight = objToArrange.getScaledHeight();
+
+    // Start with the entire safe area as available space
+    let freeRects = [safeRect];
+
+    // Subtract existing objects from freeRects to find available spaces
+    const blockers = getUserObjects().filter(obj => obj !== objToArrange);
+    blockers.forEach(obj => {
+        const bounds = obj.getBoundingRect();
+        const blocker = {
+            left: bounds.left - PLACEMENT_GUTTER,
+            top: bounds.top - PLACEMENT_GUTTER,
+            right: bounds.left + bounds.width + PLACEMENT_GUTTER,
+            bottom: bounds.top + bounds.height + PLACEMENT_GUTTER
+        };
+
+        // Clamp blocker to fit within safe area
+        const clampedBlocker = clampRect(blocker, safeRect);
+        if (clampedBlocker) {
+            // Subtract the clamped blocker from freeRects to update available spaces
+            freeRects = freeRects.flatMap(rect => subtractRect(rect, clampedBlocker));
+        }
+    });
+
+    // Prune any contained rectangles to optimize free space list
+    freeRects = pruneContainedRects(freeRects);
+
+    // Sort free rectangles by their top-left position to prioritize placement
+    freeRects.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+
+    // Find the first free rectangle that can fit the image
+    const placementRect = freeRects.find(rect => {
+        const width = rect.right - rect.left;
+        const height = rect.bottom - rect.top;
+        return width >= targetWidth && height >= targetHeight;
+    });
+
+    // Place the image in the found free rectangle (if any)
+    if (placementRect) {
+        objToArrange.set({
+            left: placementRect.left + targetWidth / 2,
+            top: placementRect.top + targetHeight / 2,
+            originX: 'center',
+            originY: 'center'
+        });
+        objToArrange.setCoords();
+        return true;
+    }
+
+    // Fallback: place at center of safe area if no slot available
+    objToArrange.set({
+        left: (safeRect.left + safeRect.right) / 2,
+        top: (safeRect.top + safeRect.bottom) / 2,
+        originX: 'center',
+        originY: 'center'
+    });
+    objToArrange.setCoords();
+    return false;
+
+    // Helper to clamp a rectangle within bounds
+    function clampRect(rect, bounds) {
+        const clampedRect = {
+            left: Math.max(rect.left, bounds.left),
+            top: Math.max(rect.top, bounds.top),
+            right: Math.min(rect.right, bounds.right),
+            bottom: Math.min(rect.bottom, bounds.bottom)
+        };
+
+        if (clampedRect.left >= clampedRect.right || clampedRect.top >= clampedRect.bottom) {
+            return null;
+        }
+        return clampedRect;
+    }
+
+    // Subtract blockerRect from freeRect, returning array of resulting rectangles, example:
+    // freeRect: {left:0, top:0, right:100, bottom:100}
+    // blockerRect: {left:30, top:30, right:70, bottom:70}
+    // returns: [
+    //   {left:0, top:0, right:100, bottom:30},    // Top
+    //   {left:0, top:30, right:30, bottom:70},    // Left
+    //   {left:70, top:30, right:100, bottom:70},  // Right
+    //   {left:0, top:70, right:100, bottom:100}   // Bottom
+    // ]
+    function subtractRect(freeRect, blockerRect) {
+        const intersection = {
+            left: Math.max(freeRect.left, blockerRect.left),
+            top: Math.max(freeRect.top, blockerRect.top),
+            right: Math.min(freeRect.right, blockerRect.right),
+            bottom: Math.min(freeRect.bottom, blockerRect.bottom)
+        };
+
+        if (intersection.left >= intersection.right || intersection.top >= intersection.bottom) {
+            return [freeRect];
+        }
+
+        const result = [];
+
+        // Space above the blocker
+        if (freeRect.top < intersection.top) {
+            result.push({ left: freeRect.left, top: freeRect.top, right: freeRect.right, bottom: intersection.top });
+        }
+
+        // Space below the blocker
+        if (intersection.bottom < freeRect.bottom) {
+            result.push({ left: freeRect.left, top: intersection.bottom, right: freeRect.right, bottom: freeRect.bottom });
+        }
+
+        const middleTop = Math.max(freeRect.top, intersection.top);
+        const middleBottom = Math.min(freeRect.bottom, intersection.bottom);
+
+        if (middleBottom > middleTop) {
+            // Space to the left of the blocker
+            if (freeRect.left < intersection.left) {
+                result.push({ left: freeRect.left, top: middleTop, right: intersection.left, bottom: middleBottom });
+            }
+
+            // Space to the right of the blocker
+            if (intersection.right < freeRect.right) {
+                result.push({ left: intersection.right, top: middleTop, right: freeRect.right, bottom: middleBottom });
+            }
+        }
+
+        return result.filter(rect => rect.right - rect.left > 1 && rect.bottom - rect.top > 1);
+    }
+
+    // Remove rectangles that are fully contained within others
+    function pruneContainedRects(rects) {
+        return rects.filter((rect, index) => {
+            return !rects.some((other, otherIdx) => {
+                if (index === otherIdx) return false;
+                return other.left <= rect.left && other.top <= rect.top &&
+                    other.right >= rect.right && other.bottom >= rect.bottom;
+            });
+        });
+    }
+}
+
+/**
+ * Reflow any objects that fall outside the safe area after an orientation change.
+ * Uses arrangeImageOnCanvas to find new slots for displaced items.
+ */
+function reflowObjectsIntoSafeArea() {
+    if (!canvas) return;
+
+    const zoom = canvas.getZoom() || 1;
+    const virtualWidth = canvas.width / zoom;
+    const virtualHeight = canvas.height / zoom;
+
+    const safeRect = {
+        left: BLEED_PIXELS + PLACEMENT_PADDING,
+        top: BLEED_PIXELS + PLACEMENT_PADDING,
+        right: virtualWidth - BLEED_PIXELS - PLACEMENT_PADDING,
+        bottom: virtualHeight - BLEED_PIXELS - PLACEMENT_PADDING
+    };
+
+    if (safeRect.right <= safeRect.left || safeRect.bottom <= safeRect.top) {
+        return;
+    }
+
+    const outOfBoundsObjects = getUserObjects().filter(obj => {
+        const bounds = obj.getBoundingRect(true);
+        return bounds.left < safeRect.left ||
+            bounds.top < safeRect.top ||
+            (bounds.left + bounds.width) > safeRect.right ||
+            (bounds.top + bounds.height) > safeRect.bottom;
+    });
+
+    if (outOfBoundsObjects.length === 0) {
+        return;
+    }
+
+    const previousRestoringState = isRestoring;
+    isRestoring = true;
+
+    outOfBoundsObjects.forEach(obj => canvas.remove(obj));
+
+    const failedRepositions = [];
+    outOfBoundsObjects.forEach(obj => {
+        canvas.add(obj);
+        const placed = arrangeObjectOnCanvas(obj);
+        if (!placed) {
+            failedRepositions.push(obj);
+        }
+    });
+
+    canvas.requestRenderAll();
+    bringBleedObjectsToFront();
+
+    isRestoring = previousRestoringState;
+    if (!previousRestoringState) {
+        saveState();
+    }
+    console.log(`Reflowed ${outOfBoundsObjects.length} object(s) into safe area after orientation change.`);
+    if (failedRepositions.length > 0) {
+        console.warn(`${failedRepositions.length} object(s) could not be repositioned within the safe area.`);
+    }
 }
 
 /**
@@ -438,13 +701,9 @@ function handleDrop(e) {
     e.stopPropagation();
 
     const files = e.dataTransfer.files;
-    if (files.length === 0) return;
+    if (!files || files.length === 0) return;
 
-    Array.from(files).forEach(file => {
-        if (file.type.match('image.*')) {
-            loadImage(file);
-        }
-    });
+    processImageFiles(files);
 }
 
 /**
@@ -608,13 +867,10 @@ function clearCanvas() {
 }
 
 /**
- * Fill sheet with as many copies as possible
+ * Fill the sheet by re-arranging existing objects via arrangeImageOnCanvas
+ * and then repeatedly cloning those originals until no more clones fit.
  */
-function fillSheet() {
-    const MARGIN_MM = 3;
-    const MARGIN_PIXELS = MARGIN_MM * MM_TO_PIXELS;
-
-    // Get all user objects
+async function fillSheet() {
     const userObjects = getUserObjects();
 
     if (userObjects.length === 0) {
@@ -622,115 +878,60 @@ function fillSheet() {
         return;
     }
 
-    // Temporarily disable state saving
     isRestoring = true;
+    canvas.discardActiveObject();
 
-    // Work in virtual coordinates (300 DPI, unscaled)
-    const virtualWidth = canvas.width / canvas.getZoom();
-    const virtualHeight = canvas.height / canvas.getZoom();
+    try {
+        const originals = [...userObjects];
+        originals.forEach(obj => canvas.remove(obj));
 
-    // First, arrange original objects in a grid layout without overlapping
-    const startX = BLEED_PIXELS + MARGIN_PIXELS;
-    const startY = BLEED_PIXELS + MARGIN_PIXELS;
-    const availableWidth = virtualWidth - (BLEED_PIXELS * 2) - (MARGIN_PIXELS * 2);
-    const availableHeight = virtualHeight - (BLEED_PIXELS * 2) - (MARGIN_PIXELS * 2);
+        const placedOriginals = [];
+        const failedOriginals = [];
 
-    let currentX = startX;
-    let currentY = startY;
-    let rowHeight = 0;
-
-    // Position each original object
-    userObjects.forEach((obj, index) => {
-        const bounds = obj.getBoundingRect(true);
-        const objWidth = bounds.width;
-        const objHeight = bounds.height;
-
-        // Check if object fits in current row
-        if (currentX > startX && currentX + objWidth > startX + availableWidth) {
-            // Move to next row
-            currentX = startX;
-            currentY += rowHeight + MARGIN_PIXELS;
-            rowHeight = 0;
-        }
-
-        // Calculate center position for the object
-        const centerX = currentX + objWidth / 2;
-        const centerY = currentY + objHeight / 2;
-
-        obj.set({
-            left: centerX,
-            top: centerY
+        originals.forEach(obj => {
+            canvas.add(obj);
+            const placed = arrangeObjectOnCanvas(obj);
+            if (placed) {
+                placedOriginals.push(obj);
+            } else {
+                failedOriginals.push(obj);
+            }
         });
-        obj.setCoords();
 
-        // Update position for next object
-        currentX += objWidth + MARGIN_PIXELS;
-        rowHeight = Math.max(rowHeight, objHeight);
-    });
-
-    // Calculate bounding box of the arranged objects
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-    userObjects.forEach(obj => {
-        const bounds = obj.getBoundingRect(true);
-        minX = Math.min(minX, bounds.left);
-        minY = Math.min(minY, bounds.top);
-        maxX = Math.max(maxX, bounds.left + bounds.width);
-        maxY = Math.max(maxY, bounds.top + bounds.height);
-    });
-
-    const groupWidth = maxX - minX;
-    const groupHeight = maxY - minY;
-
-    // Calculate how many copies of the entire group fit
-    const stepX = groupWidth + MARGIN_PIXELS;
-    const stepY = groupHeight + MARGIN_PIXELS;
-    const copiesX = Math.floor(availableWidth / stepX);
-    const copiesY = Math.floor(availableHeight / stepY);
-
-    if (copiesX < 1 || copiesY < 1) {
-        isRestoring = false;
-        alert('Design is too large to fit multiple copies!');
-        canvas.requestRenderAll();
-        return;
-    }
-
-    // Create copies of the entire group
-    const allCopies = [];
-
-    for (let row = 0; row < copiesY; row++) {
-        for (let col = 0; col < copiesX; col++) {
-            // Skip the first position (0,0) as original objects are already there
-            if (row === 0 && col === 0) continue;
-
-            // Calculate offset for this grid cell
-            const cellOffsetX = col * stepX;
-            const cellOffsetY = row * stepY;
-
-            // Clone each object in the group
-            userObjects.forEach(obj => {
-                obj.clone()
-                    .then(cloned => {
-                        // Position clone based on the original position plus cell offset
-                        cloned.set({
-                            left: obj.left + cellOffsetX,
-                            top: obj.top + cellOffsetY
-                        });
-                        canvas.add(cloned);
-                        allCopies.push(cloned);
-                    });
-            });
+        if (failedOriginals.length > 0) {
+            console.warn('Some originals could not be arranged within the safe area.');
         }
-    }
 
-    // Ensure bleed areas stay on top and save state once
-    setTimeout(() => {
+        if (placedOriginals.length > 0) {
+            let clonesPlacedInPass = 0;
+            do {
+                clonesPlacedInPass = 0;
+                for (const base of placedOriginals) {
+                    try {
+                        const clone = await base.clone();
+                        canvas.add(clone);
+                        const placed = arrangeObjectOnCanvas(clone);
+                        if (placed) {
+                            clonesPlacedInPass++;
+                        } else {
+                            canvas.remove(clone);
+                        }
+                    } catch (err) {
+                        console.error('Error cloning object during fillSheet:', err);
+                    }
+                }
+            } while (clonesPlacedInPass > 0);
+        } else {
+            alert('No objects could be arranged within the safe area.');
+        }
+    } catch (err) {
+        console.error('Unexpected error while filling the sheet:', err);
+    } finally {
         canvas.requestRenderAll();
-        // Re-enable state saving and save the entire fill operation as one state
-        isRestoring = false;
         bringBleedObjectsToFront();
+        isRestoring = false;
         saveState();
-    }, 100);
+    }
 }
 
 /**
@@ -940,8 +1141,8 @@ function handleKeyboard(e) {
     // Delete key
     if (e.key === 'Delete' || e.key === 'Backspace') {
         const activeElement = document.activeElement;
-        // Only delete if not typing in an input
-        if (activeElement.tagName !== 'INPUT' && activeElement.tagName !== 'TEXTAREA') {
+        const typingInField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.isContentEditable);
+        if (!typingInField) {
             e.preventDefault();
             deleteSelected();
         }
@@ -991,14 +1192,6 @@ document.addEventListener('DOMContentLoaded', function () {
         showUploadDialog();
     }, 500);
 
-    // Handle window resize for responsive canvas
-    let resizeTimeout;
-    window.addEventListener('resize', function () {
-        clearTimeout(resizeTimeout);
-        resizeTimeout = setTimeout(function () {
-            scaleCanvas();
-        }, 250);
-    });
 });
 
 /* ============================================
@@ -1022,32 +1215,31 @@ function initUploadDialog() {
     // Content type switching
     const imageModeBtn = document.getElementById('image-mode-btn');
     const textModeBtn = document.getElementById('text-mode-btn');
+    const symbolModeBtn = document.getElementById('symbol-mode-btn');
     const imageSection = document.getElementById('image-section');
     const textSection = document.getElementById('text-section');
+    const symbolsSection = document.getElementById('symbols-section');
 
     // Text mode elements
-    const textInput = document.getElementById('text-input');
     const textSizeSlider = document.getElementById('text-size-slider');
     const textSizeValue = document.getElementById('text-size-value');
+    const textFontSelect = document.getElementById('text-font-select');
     const fillSheetTextBtn = document.getElementById('fill-sheet-text-btn');
     const addTextBtn = document.getElementById('add-text-btn');
 
     // Mode switching
-    if (imageModeBtn && textModeBtn && imageSection && textSection) {
-        imageModeBtn.addEventListener('click', () => {
-            imageModeBtn.classList.add('active');
-            textModeBtn.classList.remove('active');
-            imageSection.classList.add('active');
-            textSection.classList.remove('active');
-        });
+    const dialogModes = {
+        image: { button: imageModeBtn, section: imageSection },
+        text: { button: textModeBtn, section: textSection },
+        symbols: { button: symbolModeBtn, section: symbolsSection }
+    };
 
-        textModeBtn.addEventListener('click', () => {
-            textModeBtn.classList.add('active');
-            imageModeBtn.classList.remove('active');
-            textSection.classList.add('active');
-            imageSection.classList.remove('active');
-        });
-    }
+    Object.entries(dialogModes).forEach(([mode, config]) => {
+        if (!config.button || !config.section) return;
+        config.button.addEventListener('click', () => setDialogMode(mode, dialogModes));
+    });
+
+    setDialogMode('image', dialogModes);
 
     // Text size slider
     if (textSizeSlider && textSizeValue) {
@@ -1058,23 +1250,26 @@ function initUploadDialog() {
         });
     }
 
-    // Update text width when user types
-    if (textInput) {
-        textInput.addEventListener('input', () => {
+    initTextPreviewInput();
+
+    if (textFontSelect) {
+        textFontSelect.addEventListener('change', () => {
             updateTextWidth();
         });
     }
 
+    initSymbolsTab();
+
     // Text buttons
     if (fillSheetTextBtn) {
         fillSheetTextBtn.addEventListener('click', () => {
-            addTextFromDialog(true); // true = fill sheet
+            addTextFromDialog({ closeDialog: true });
         });
     }
 
     if (addTextBtn) {
         addTextBtn.addEventListener('click', () => {
-            addTextFromDialog(false); // false = just add one
+            addTextFromDialog();
         });
     }
 
@@ -1120,19 +1315,20 @@ function initUploadDialog() {
     sizeSlider.addEventListener('input', (e) => {
         const value = e.target.value;
         sizeValue.textContent = parseFloat(value).toFixed(1);
+        updateImageSize();
     });
 
     // Update slider range based on orientation
     updateSliderRange();
 
-    // Fill sheet button
+    // "No" button closes dialog after adding content
     fillSheetDialogBtn.addEventListener('click', () => {
-        addImageFromDialog(true); // true = fill sheet
+        addImageFromDialog({ closeDialog: true });
     });
 
-    // Add more button
+    // "Yes" button keeps dialog open for additional uploads
     addMoreBtn.addEventListener('click', () => {
-        addImageFromDialog(false); // false = just add one
+        addImageFromDialog();
     });
 
     // Close dialog button
@@ -1161,6 +1357,511 @@ function initUploadDialog() {
         if (e.key === 'Escape' && uploadDialog && uploadDialog.classList.contains('show')) {
             hideUploadDialog();
         }
+    });
+
+    updateTextWidth();
+}
+
+function getDialogModeConfig() {
+    return {
+        image: {
+            button: document.getElementById('image-mode-btn'),
+            section: document.getElementById('image-section')
+        },
+        text: {
+            button: document.getElementById('text-mode-btn'),
+            section: document.getElementById('text-section')
+        },
+        symbols: {
+            button: document.getElementById('symbol-mode-btn'),
+            section: document.getElementById('symbols-section')
+        }
+    };
+}
+
+function setDialogMode(mode, configs) {
+    const map = configs || getDialogModeConfig();
+    Object.entries(map).forEach(([key, config]) => {
+        if (!config.button || !config.section) return;
+        if (key === mode) {
+            config.button.classList.add('active');
+            config.section.classList.add('active');
+        } else {
+            config.button.classList.remove('active');
+            config.section.classList.remove('active');
+        }
+    });
+    activeDialogMode = mode;
+}
+
+function initSymbolsTab() {
+    symbolUI.searchInput = document.getElementById('symbol-search-input');
+    symbolUI.searchButton = document.getElementById('symbol-search-btn');
+    symbolUI.loading = document.getElementById('symbol-loading');
+    symbolUI.resultsGrid = document.getElementById('symbol-results-grid');
+    symbolUI.emptyState = document.getElementById('symbol-empty-state');
+    symbolUI.pagination = document.getElementById('symbol-pagination');
+    symbolUI.prevButton = document.getElementById('symbol-prev-btn');
+    symbolUI.nextButton = document.getElementById('symbol-next-btn');
+    symbolUI.pageInfo = document.getElementById('symbol-page-info');
+    symbolUI.selectionPanel = document.getElementById('symbol-selection-panel');
+    symbolUI.preview = document.getElementById('symbol-preview');
+    symbolUI.title = document.getElementById('symbol-title');
+    symbolUI.tags = document.getElementById('symbol-tags');
+    symbolUI.addButton = document.getElementById('add-symbol-btn');
+    symbolUI.fillButton = document.getElementById('fill-sheet-symbol-btn');
+    symbolUI.domainWarning = document.getElementById('symbol-domain-warning');
+
+    if (!symbolUI.searchInput || !symbolUI.resultsGrid) return;
+
+    if (symbolUI.searchButton) {
+        symbolUI.searchButton.addEventListener('click', () => {
+            startSymbolSearch();
+        });
+    }
+
+    symbolUI.searchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            startSymbolSearch();
+        }
+    });
+
+    if (symbolUI.prevButton) {
+        symbolUI.prevButton.addEventListener('click', () => {
+            handleSymbolPagination('prev');
+        });
+    }
+
+    if (symbolUI.nextButton) {
+        symbolUI.nextButton.addEventListener('click', () => {
+            handleSymbolPagination('next');
+        });
+    }
+
+    symbolUI.resultsGrid.addEventListener('click', (event) => {
+        const card = event.target.closest('.symbol-card');
+        if (!card) return;
+        const index = parseInt(card.dataset.index, 10);
+        if (Number.isInteger(index)) {
+            selectSymbolResult(index);
+        }
+    });
+
+    if (symbolUI.addButton) {
+        symbolUI.addButton.addEventListener('click', () => {
+            addSelectedSymbolToCanvas();
+        });
+    }
+
+    if (symbolUI.fillButton) {
+        symbolUI.fillButton.addEventListener('click', () => {
+            addSelectedSymbolToCanvas({ fillSheetAfter: true });
+        });
+    }
+
+    updateSymbolDomainWarning();
+    showSymbolEmptyState('Use the search box to explore thousands of SVG symbols.');
+    updateSymbolSelectionPanel();
+}
+
+function startSymbolSearch({ start = 0, preserveStack = false } = {}) {
+    if (!symbolUI.searchInput) return;
+    const query = symbolUI.searchInput.value.trim();
+    if (!query) {
+        showSymbolEmptyState('Enter a keyword such as "flower", "moon", or "triangle" to search for icons.');
+        symbolSearchState.results = [];
+        renderSymbolResults(true);
+        return;
+    }
+
+    if (!hasSymbolApiKey()) {
+        updateSymbolDomainWarning(true);
+        showSymbolEmptyState('Provide your svgapi.com domain key to enable symbol search.');
+        return;
+    }
+
+    const sameQuery = query === symbolSearchState.query;
+    if (!preserveStack || !sameQuery) {
+        symbolSearchState.prevStack = [];
+    }
+
+    fetchSymbols(query, start);
+}
+
+async function fetchSymbols(query, start) {
+    if (!symbolUI.resultsGrid) return;
+
+    symbolSearchState.query = query;
+    symbolSearchState.start = start;
+    symbolSearchState.selectedIndex = null;
+    symbolSearchState.limit = Math.min(SYMBOLS_PAGE_SIZE, 20);
+
+    setSymbolLoading(true);
+    showSymbolEmptyState('');
+    symbolUI.resultsGrid.innerHTML = '';
+
+    if (symbolSearchController) {
+        symbolSearchController.abort();
+    }
+    symbolSearchController = new AbortController();
+
+    try {
+        const url = buildSvgApiListUrl(query, start, SYMBOLS_PAGE_SIZE);
+        const response = await fetch(url, { signal: symbolSearchController.signal });
+        if (!response.ok) {
+            throw new Error(`SVG API responded with status ${response.status}`);
+        }
+        const data = await response.json();
+        const normalized = normalizeSymbolResponse(data);
+        symbolSearchState.results = normalized.items;
+        symbolSearchState.nextStart = normalized.nextStart;
+        symbolSearchState.total = normalized.total;
+        renderSymbolResults(true);
+    } catch (error) {
+        if (error.name === 'AbortError') return;
+        console.error('Symbol search failed:', error);
+        symbolSearchState.results = [];
+        symbolSearchState.selectedIndex = null;
+        showSymbolEmptyState('Unable to load symbols. Please try again.');
+        updateSymbolSelectionPanel();
+        updateSymbolPaginationControls();
+    } finally {
+        setSymbolLoading(false);
+    }
+}
+
+function buildSvgApiListUrl(query, start, limit) {
+    const safeQuery = encodeURIComponent(query);
+    let url = `${SVG_API_BASE_URL}/${SVG_API_DOMAIN_KEY}/list/?search=${safeQuery}&limit=${Math.min(limit, 20)}`;
+    if (start && start > 0) {
+        url += `&start=${start}`;
+    }
+    return url;
+}
+
+function normalizeSymbolResponse(payload) {
+    const collections = [payload && payload.icons, payload && payload.data, payload && payload.results, payload && payload.items];
+    const rawItems = collections.find(Array.isArray) || [];
+    const items = rawItems.map((item, index) => formatSymbolItem(item, index));
+    const nextStart = extractStartValue(payload ? payload.next : null);
+    const total = payload && typeof payload.total === 'number'
+        ? payload.total
+        : (payload && typeof payload.count === 'number' ? payload.count : null);
+
+    return { items, nextStart, total };
+}
+
+function formatSymbolItem(item, index) {
+    const fallbackId = `symbol-${Date.now()}-${index}`;
+    const tags = Array.isArray(item && item.tags) ? item.tags :
+        (typeof (item && item.tags) === 'string'
+            ? item.tags.split(/[,;]+/).map(tag => tag.trim()).filter(Boolean)
+            : (Array.isArray(item && item.keywords) ? item.keywords : []));
+    return {
+        id: (item && (item.id || item.slug || item.uuid || item.name)) || fallbackId,
+        title: (item && (item.title || item.name || item.slug)) || 'Untitled symbol',
+        tags,
+        svg: item && (item.svg || item.svg_inline || item.svg_data) || null,
+        url: item && (item.url || item.download_url || item.svg_url) || null,
+        previewUrl: item && (item.preview_url || item.thumbnail || item.url) || null
+    };
+}
+
+function extractStartValue(value) {
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const match = value.match(/[?&]start=(\d+)/i);
+        if (match) {
+            return parseInt(match[1], 10);
+        }
+    }
+    return null;
+}
+
+function renderSymbolResults(clearSelection) {
+    if (!symbolUI.resultsGrid || !symbolUI.emptyState) return;
+
+    if (clearSelection) {
+        symbolSearchState.selectedIndex = null;
+    }
+
+    symbolUI.resultsGrid.innerHTML = '';
+
+    if (!symbolSearchState.results.length) {
+        symbolUI.resultsGrid.style.display = 'none';
+        symbolUI.emptyState.style.display = 'block';
+        if (symbolSearchState.query) {
+            setSymbolEmptyMessage(`No symbols found for "${symbolSearchState.query}". Try another keyword.`);
+        }
+        updateSymbolSelectionPanel();
+        updateSymbolPaginationControls();
+        return;
+    }
+
+    symbolUI.emptyState.style.display = 'none';
+    symbolUI.resultsGrid.style.display = 'grid';
+
+    symbolSearchState.results.forEach((symbol, index) => {
+        const card = document.createElement('div');
+        card.className = 'symbol-card';
+        card.dataset.index = index;
+
+        const preview = document.createElement('div');
+        preview.className = 'symbol-card-preview';
+        if (symbol.previewUrl) {
+            const img = document.createElement('img');
+            img.src = symbol.previewUrl;
+            img.alt = symbol.title;
+            img.loading = 'lazy';
+            img.referrerPolicy = 'no-referrer';
+            preview.appendChild(img);
+        } else if (symbol.svg) {
+            preview.innerHTML = symbol.svg;
+        } else {
+            preview.textContent = 'Preview unavailable';
+        }
+        card.appendChild(preview);
+
+        const title = document.createElement('div');
+        title.className = 'symbol-card-title';
+        title.textContent = symbol.title;
+        card.appendChild(title);
+
+        symbolUI.resultsGrid.appendChild(card);
+    });
+
+    applySymbolSelectionStyles();
+    updateSymbolSelectionPanel();
+    updateSymbolPaginationControls();
+}
+
+function applySymbolSelectionStyles() {
+    if (!symbolUI.resultsGrid) return;
+    const cards = symbolUI.resultsGrid.querySelectorAll('.symbol-card');
+    cards.forEach(card => {
+        const cardIndex = parseInt(card.dataset.index, 10);
+        if (cardIndex === symbolSearchState.selectedIndex) {
+            card.classList.add('selected');
+        } else {
+            card.classList.remove('selected');
+        }
+    });
+}
+
+function showSymbolEmptyState(message) {
+    if (!symbolUI.emptyState || !symbolUI.resultsGrid) return;
+    symbolUI.resultsGrid.innerHTML = '';
+    symbolUI.resultsGrid.style.display = 'none';
+    symbolUI.emptyState.style.display = 'block';
+    if (message) {
+        setSymbolEmptyMessage(message);
+    }
+}
+
+function setSymbolEmptyMessage(message) {
+    if (!symbolUI.emptyState) return;
+    symbolUI.emptyState.innerHTML = '';
+    const paragraph = document.createElement('p');
+    paragraph.textContent = message;
+    symbolUI.emptyState.appendChild(paragraph);
+}
+
+function setSymbolLoading(isLoading, { disableInput = true, disableButton = true } = {}) {
+    if (symbolUI.loading) {
+        symbolUI.loading.style.display = isLoading ? 'block' : 'none';
+    }
+    if (symbolUI.searchButton && disableButton) {
+        symbolUI.searchButton.disabled = isLoading;
+    }
+    if (symbolUI.searchInput && disableInput) {
+        symbolUI.searchInput.disabled = isLoading;
+    }
+}
+
+function updateSymbolPaginationControls() {
+    if (!symbolUI.pagination || !symbolUI.prevButton || !symbolUI.nextButton || !symbolUI.pageInfo) return;
+    const hasPrev = symbolSearchState.prevStack.length > 0;
+    const hasNext = Number.isInteger(symbolSearchState.nextStart);
+    if (!symbolSearchState.results.length) {
+        symbolUI.pagination.style.display = 'none';
+    } else {
+        symbolUI.pagination.style.display = hasPrev || hasNext ? 'flex' : 'none';
+    }
+    symbolUI.prevButton.disabled = !hasPrev;
+    symbolUI.nextButton.disabled = !hasNext;
+    const pageNumber = Math.floor(symbolSearchState.start / symbolSearchState.limit) + 1;
+    symbolUI.pageInfo.textContent = `Page ${pageNumber}`;
+}
+
+function handleSymbolPagination(direction) {
+    if (!symbolSearchState.results.length) return;
+    if (direction === 'next') {
+        if (!Number.isInteger(symbolSearchState.nextStart)) return;
+        symbolSearchState.prevStack.push(symbolSearchState.start);
+        startSymbolSearch({ start: symbolSearchState.nextStart, preserveStack: true });
+    } else if (direction === 'prev') {
+        if (!symbolSearchState.prevStack.length) return;
+        const previousStart = symbolSearchState.prevStack.pop();
+        startSymbolSearch({ start: previousStart, preserveStack: true });
+    }
+}
+
+function selectSymbolResult(index) {
+    if (index < 0 || index >= symbolSearchState.results.length) return;
+    symbolSearchState.selectedIndex = index;
+    applySymbolSelectionStyles();
+    updateSymbolSelectionPanel();
+}
+
+function updateSymbolSelectionPanel() {
+    if (!symbolUI.selectionPanel) return;
+    const symbol = getSelectedSymbol();
+    if (!symbol) {
+        symbolUI.selectionPanel.style.display = 'none';
+        if (symbolUI.preview) {
+            symbolUI.preview.innerHTML = '';
+        }
+        setSymbolActionButtonsEnabled(false);
+        return;
+    }
+
+    symbolUI.selectionPanel.style.display = 'flex';
+    if (symbolUI.preview) {
+        symbolUI.preview.innerHTML = '';
+        if (symbol.svg) {
+            symbolUI.preview.innerHTML = symbol.svg;
+        } else if (symbol.previewUrl || symbol.url) {
+            const img = document.createElement('img');
+            img.src = symbol.previewUrl || symbol.url;
+            img.alt = symbol.title;
+            img.loading = 'lazy';
+            symbolUI.preview.appendChild(img);
+        } else {
+            symbolUI.preview.textContent = 'Preview unavailable';
+        }
+    }
+
+    if (symbolUI.title) {
+        symbolUI.title.textContent = symbol.title;
+    }
+    if (symbolUI.tags) {
+        const hasTags = Array.isArray(symbol.tags) && symbol.tags.length > 0;
+        symbolUI.tags.textContent = hasTags ? `Tags: ${symbol.tags.join(', ')}` : 'No tags provided for this symbol.';
+    }
+
+    setSymbolActionButtonsEnabled(true);
+}
+
+function setSymbolActionButtonsEnabled(enabled) {
+    if (symbolUI.addButton) {
+        symbolUI.addButton.disabled = !enabled;
+    }
+    if (symbolUI.fillButton) {
+        symbolUI.fillButton.disabled = !enabled;
+    }
+}
+
+function updateSymbolDomainWarning(forceShow) {
+    if (!symbolUI.domainWarning) return;
+    if (hasSymbolApiKey() && !forceShow) {
+        symbolUI.domainWarning.style.display = 'none';
+    } else {
+        symbolUI.domainWarning.style.display = 'block';
+    }
+}
+
+function hasSymbolApiKey() {
+    return typeof SVG_API_DOMAIN_KEY === 'string' && SVG_API_DOMAIN_KEY.length > 0;
+}
+
+function getSelectedSymbol() {
+    if (typeof symbolSearchState.selectedIndex !== 'number') {
+        return null;
+    }
+    return symbolSearchState.results[symbolSearchState.selectedIndex] || null;
+}
+
+async function addSelectedSymbolToCanvas({ fillSheetAfter = false } = {}) {
+    const symbol = getSelectedSymbol();
+    if (!symbol) {
+        alert('Please select a symbol first.');
+        return;
+    }
+
+    try {
+        setSymbolLoading(true, { disableInput: false, disableButton: false });
+        const svgContent = await fetchSymbolSvgContent(symbol);
+        const fabricObject = await createFabricObjectFromSvg(svgContent);
+        positionSymbolOnCanvas(fabricObject);
+        canvas.add(fabricObject);
+        arrangeObjectOnCanvas(fabricObject);
+        canvas.setActiveObject(fabricObject);
+        canvas.renderAll();
+        updateToolbarState();
+
+        if (fillSheetAfter) {
+            hideUploadDialog();
+            setTimeout(() => {
+                fillSheet();
+            }, 100);
+        }
+    } catch (error) {
+        console.error('Failed to add symbol:', error);
+        alert('Unable to add symbol to the sheet. Please try again.');
+    } finally {
+        setSymbolLoading(false, { disableInput: false, disableButton: false });
+    }
+}
+
+async function fetchSymbolSvgContent(symbol) {
+    if (symbol.svg) {
+        return symbol.svg;
+    }
+    if (!symbol.url) {
+        throw new Error('Symbol does not provide an SVG download URL.');
+    }
+    const response = await fetch(symbol.url);
+    if (!response.ok) {
+        throw new Error(`Failed to download SVG (${response.status}).`);
+    }
+    const svgText = await response.text();
+    symbol.svg = svgText;
+    return svgText;
+}
+
+function createFabricObjectFromSvg(svgText) {
+    return new Promise((resolve, reject) => {
+        fabric.loadSVGFromString(svgText, (objects, options) => {
+            if (!objects || !objects.length) {
+                reject(new Error('SVG did not contain drawable elements.'));
+                return;
+            }
+            const obj = fabric.util.groupSVGElements(objects, options || {});
+            resolve(obj);
+        }, (error) => {
+            reject(error);
+        });
+    });
+}
+
+function positionSymbolOnCanvas(symbolObject) {
+    const virtualWidth = canvas.width / canvas.getZoom();
+    const virtualHeight = canvas.height / canvas.getZoom();
+    const safeAreaWidth = virtualWidth - (BLEED_PIXELS * 2);
+    const maxWidth = safeAreaWidth * 0.8;
+
+    if (symbolObject.width > maxWidth) {
+        symbolObject.scaleToWidth(maxWidth);
+    }
+
+    symbolObject.set({
+        left: virtualWidth / 2,
+        top: virtualHeight / 2,
+        originX: 'center',
+        originY: 'center'
     });
 }
 
@@ -1221,12 +1922,35 @@ function showPreview(imageData) {
     previewImage.src = imageData;
     uploadZone.style.display = 'none';
     previewSection.style.display = 'block';
+
+    // Update image size display when image loads
+    previewImage.onload = function () {
+        updateImageSize();
+    };
+}
+
+/**
+ * Update image size display based on current slider value
+ */
+function updateImageSize() {
+    const previewImage = document.getElementById('preview-image');
+    const sizeSlider = document.getElementById('size-slider');
+    const sizeHeightValue = document.getElementById('size-height-value');
+
+    if (!previewImage || !sizeSlider || !sizeHeightValue || !previewImage.naturalWidth) return;
+
+    const targetWidthCm = parseFloat(sizeSlider.value);
+    const aspectRatio = previewImage.naturalHeight / previewImage.naturalWidth;
+    const heightCm = targetWidthCm * aspectRatio;
+
+    sizeHeightValue.textContent = heightCm.toFixed(1);
 }
 
 /**
  * Add image from dialog to canvas
+ * @param {{closeDialog?: boolean, fillSheetAfter?: boolean}} options
  */
-function addImageFromDialog(shouldFillSheet = false) {
+function addImageFromDialog({ closeDialog = false, fillSheetAfter = false } = {}) {
     if (!currentImageData) return;
 
     const sizeSlider = document.getElementById('size-slider');
@@ -1260,11 +1984,12 @@ function addImageFromDialog(shouldFillSheet = false) {
 
             // Add to canvas
             canvas.add(img);
+            arrangeObjectOnCanvas(img);
             canvas.setActiveObject(img);
             canvas.renderAll();
             updateToolbarState();
 
-            if (shouldFillSheet) {
+            if (fillSheetAfter) {
                 // Hide dialog first
                 hideUploadDialog();
 
@@ -1272,6 +1997,9 @@ function addImageFromDialog(shouldFillSheet = false) {
                 setTimeout(() => {
                     fillSheet();
                 }, 100);
+            } else if (closeDialog) {
+                hideUploadDialog();
+                resetDialogForNextImage();
             } else {
                 // Reset dialog for next image
                 resetDialogForNextImage();
@@ -1304,19 +2032,19 @@ function resetDialogForNextImage() {
 
 /**
  * Add text from dialog
- * @param {boolean} shouldFillSheet - Whether to fill sheet after adding
+ * @param {{closeDialog?: boolean, fillSheetAfter?: boolean}} options
  */
-function addTextFromDialog(shouldFillSheet) {
-    const textInput = document.getElementById('text-input');
+function addTextFromDialog({ closeDialog = false, fillSheetAfter = false } = {}) {
     const textSizeSlider = document.getElementById('text-size-slider');
 
-    const textContent = textInput.value.trim();
+    const textContent = getTextPreviewValue();
     if (!textContent) {
         alert('Please enter some text.');
         return;
     }
 
     const fontSize = parseInt(textSizeSlider.value, 10);
+    const fontFamily = getSelectedTextFont();
 
     // Get virtual canvas dimensions
     const virtualWidth = canvas.width / canvas.getZoom();
@@ -1332,16 +2060,17 @@ function addTextFromDialog(shouldFillSheet) {
         originY: 'center',
         fontSize: fontSize,
         fill: '#000000',
-        fontFamily: 'Arial'
+        fontFamily: fontFamily
     });
 
     // Add to canvas
     canvas.add(text);
+    arrangeObjectOnCanvas(text);
     canvas.setActiveObject(text);
     canvas.renderAll();
     updateToolbarState();
 
-    if (shouldFillSheet) {
+    if (fillSheetAfter) {
         // Hide dialog first
         hideUploadDialog();
 
@@ -1349,6 +2078,9 @@ function addTextFromDialog(shouldFillSheet) {
         setTimeout(() => {
             fillSheet();
         }, 100);
+    } else if (closeDialog) {
+        hideUploadDialog();
+        resetDialogForNextText();
     } else {
         // Reset dialog for next text
         resetDialogForNextText();
@@ -1359,52 +2091,177 @@ function addTextFromDialog(shouldFillSheet) {
  * Reset dialog for adding another text
  */
 function resetDialogForNextText() {
-    const textInput = document.getElementById('text-input');
-
-    // Clear text input (keep size setting)
-    textInput.value = '';
-    textInput.focus();
+    const textPreview = getTextPreviewElement();
+    if (textPreview) {
+        textPreview.textContent = '';
+        textPreview.focus();
+    }
     updateTextWidth();
+}
+
+/**
+ * Lazily create a reusable Fabric.Text instance for measurement only
+ */
+function getTextMeasurementHelper() {
+    if (!textMeasurementHelper) {
+        textMeasurementHelper = new fabric.Text('', {
+            fontFamily: 'Arial',
+            left: -1000,
+            top: -1000,
+            visible: false
+        });
+    }
+    return textMeasurementHelper;
+}
+
+function getSelectedTextFont() {
+    const select = document.getElementById('text-font-select');
+    return select && select.value ? select.value : 'Arial';
+}
+
+function getTextPreviewElement() {
+    return document.getElementById('text-preview');
+}
+
+function getTextPreviewValue() {
+    const textPreview = getTextPreviewElement();
+    if (!textPreview) return '';
+    return textPreview.innerText
+        .replace(/\u00A0/g, ' ')
+        .replace(/\r\n/g, '\n')
+        .trim();
+}
+
+function initTextPreviewInput() {
+    const textPreview = getTextPreviewElement();
+    if (!textPreview) return;
+
+    textPreview.textContent = '';
+
+    textPreview.addEventListener('input', () => {
+        updateTextWidth();
+    });
+
+    textPreview.addEventListener('paste', event => {
+        event.preventDefault();
+        const clipboard = event.clipboardData || window.clipboardData;
+        const text = clipboard ? clipboard.getData('text/plain') : '';
+        insertTextAtCursor(textPreview, text);
+        updateTextWidth();
+    });
+}
+
+// Inserts plain text at the current caret location in the preview input
+function insertTextAtCursor(element, text) {
+    if (!text) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+        element.textContent += text;
+        return;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.commonAncestorContainer)) {
+        element.focus();
+        const focusSelection = window.getSelection();
+        if (!focusSelection) {
+            element.textContent += text;
+            return;
+        }
+        focusSelection.removeAllRanges();
+        const newRange = document.createRange();
+        newRange.selectNodeContents(element);
+        newRange.collapse(false);
+        focusSelection.addRange(newRange);
+    }
+
+    const activeSelection = window.getSelection();
+    if (!activeSelection || activeSelection.rangeCount === 0) {
+        element.textContent += text;
+        return;
+    }
+
+    const activeRange = activeSelection.getRangeAt(0);
+    activeRange.deleteContents();
+    const textNode = document.createTextNode(text);
+    activeRange.insertNode(textNode);
+    activeRange.setStartAfter(textNode);
+    activeRange.setEndAfter(textNode);
+    activeSelection.removeAllRanges();
+    activeSelection.addRange(activeRange);
+}
+
+function applyTextPreviewStyle(textContent, fontSize, fontFamily) {
+    const textPreview = getTextPreviewElement();
+    if (!textPreview) return;
+
+    textPreview.style.fontFamily = fontFamily;
+    if (fontSize && textContent) {
+        const previewFontSize = Math.min(fontSize, 96);
+        textPreview.style.fontSize = previewFontSize + 'px';
+    } else {
+        textPreview.style.fontSize = '';
+    }
 }
 
 /**
  * Calculate and display text width in millimeters
  */
 function updateTextWidth() {
-    const textInput = document.getElementById('text-input');
+    const textPreview = getTextPreviewElement();
     const textSizeSlider = document.getElementById('text-size-slider');
     const textSizeValue = document.getElementById('text-size-value');
+    const textHeightValue = document.getElementById('text-height-value');
     const textSizeControl = document.querySelector('.text-size-control');
     const textSizeWarning = document.getElementById('text-size-warning');
 
-    if (!textInput || !textSizeSlider || !textSizeValue) return;
+    if (!textPreview || !textSizeSlider || !textSizeValue) return;
 
-    const textContent = textInput.value.trim();
+    const textContent = getTextPreviewValue();
+    const fontSize = parseInt(textSizeSlider.value, 10) || 40;
+    const fontFamily = getSelectedTextFont();
+
+    applyTextPreviewStyle(textContent, fontSize, fontFamily);
+
     if (!textContent) {
         textSizeValue.textContent = '—';
+        if (textHeightValue) textHeightValue.textContent = '—';
         if (textSizeControl) textSizeControl.classList.remove('warning');
         if (textSizeWarning) textSizeWarning.style.display = 'none';
         return;
     }
 
-    const fontSize = parseInt(textSizeSlider.value, 10);
-
-    // Create a temporary text object to measure dimensions
-    const tempText = new fabric.Text(textContent, {
+    // Reuse a single Fabric.Text instance for measurement to avoid allocations
+    const measurementText = getTextMeasurementHelper();
+    measurementText.set({
+        text: textContent,
         fontSize: fontSize,
-        fontFamily: 'Arial'
+        fontFamily: fontFamily
     });
 
-    // Get width in pixels (virtual canvas coordinates)
-    const widthPx = tempText.width;
+    if (typeof measurementText.initDimensions === 'function') {
+        measurementText.initDimensions();
+    } else if (typeof measurementText._initDimensions === 'function') {
+        // Fallback for Fabric versions exposing only the private API
+        measurementText._initDimensions();
+    }
+
+    // Get width and height in pixels (virtual canvas coordinates)
+    const widthPx = measurementText.width;
+    const heightPx = measurementText.height;
     const widthMm = widthPx / MM_TO_PIXELS; // Convert pixels to mm
+    const heightMm = heightPx / MM_TO_PIXELS; // Convert pixels to mm
     const widthCm = widthMm / 10;
+    const heightCm = heightMm / 10;
 
     textSizeValue.textContent = widthCm.toFixed(1);
+    if (textHeightValue) textHeightValue.textContent = heightCm.toFixed(1);
 
     // Check if text exceeds safe area (canvas width minus 2x bleed of 5mm each)
-    // Determine canvas width based on current orientation
-    const canvasWidthMm = canvas.width > canvas.height ? A5_LONG_SIDE_MM : A5_SHORT_SIDE_MM
+    // Determine canvas width based on window orientation (same logic as slider range)
+    const isWindowLandscape = window.innerWidth > window.innerHeight;
+    const canvasWidthMm = isWindowLandscape ? A5_LONG_SIDE_MM : A5_SHORT_SIDE_MM;
     const safeAreaWidthMm = canvasWidthMm - (2 * BLEED_MM); // minus 10mm total bleed
     const safeAreaWidthCm = safeAreaWidthMm / 10;
 

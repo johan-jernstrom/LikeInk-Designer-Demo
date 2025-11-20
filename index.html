@@ -66,7 +66,7 @@
                         🔄 Clear All
                     </button>
                     <button id="fill-sheet-btn" class="btn btn-secondary">
-                        📋 Fill Sheet
+                        ✨ Auto Fill Sheet
                     </button>
                 </div>
 
@@ -125,6 +125,7 @@
             <div class="content-type-selector">
                 <button id="image-mode-btn" class="content-type-btn active">📁 Image</button>
                 <button id="text-mode-btn" class="content-type-btn">📝 Text</button>
+                <button id="symbol-mode-btn" class="content-type-btn">🔍 Symbols</button>
             </div>
 
             <!-- Image Upload Section -->
@@ -146,15 +147,16 @@
                     </div>
 
                     <div class="size-control">
-                        <label for="size-slider">Image Width: <span id="size-value">10</span> cm</label>
+                        <label for="size-slider">Size on skin: <span id="size-value">10</span> cm × <span
+                                id="size-height-value">—</span> cm</label>
                         <input type="range" id="size-slider" min="10" max="210" value="100" step="10">
                     </div>
 
                     <div class="dialog-question">
-                        <p>Do you want to add more designs to the sheet?</p>
+                        <p>Do you want to add more content to the sheet?</p>
                         <div class="dialog-buttons">
-                            <button id="fill-sheet-dialog-btn" class="btn btn-primary">No, fill sheet with this one</button>
-                            <button id="add-more-btn" class="btn btn-secondary">Yes, let me add more images</button>
+                            <button id="add-more-btn" class="btn btn-primary">Yes, let me add more content</button>
+                            <button id="fill-sheet-dialog-btn" class="btn btn-secondary">No, show me the sheet</button>
                         </div>
                     </div>
                 </div>
@@ -162,13 +164,15 @@
 
             <!-- Text Input Section (hidden by default) -->
             <div id="text-section" class="content-section">
-                <div class="text-input-container">
-                    <label for="text-input">Enter your text:</label>
-                    <textarea id="text-input" class="text-input" placeholder="Type your text here..." rows="6"></textarea>
+                <div class="text-preview-control">
+                    <label for="text-preview">Enter your text:</label>
+                    <div id="text-preview" class="text-preview" contenteditable="true" role="textbox"
+                        aria-multiline="true" data-placeholder="Type your text to preview the font."></div>
                 </div>
 
                 <div class="text-size-control">
-                    <label for="text-size-slider">Text Size: <span id="text-size-value">—</span> cm</label>
+                    <label for="text-size-slider">Size on skin: <span id="text-size-value">—</span> cm × <span
+                            id="text-height-value">—</span> cm</label>
                     <input type="range" id="text-size-slider" min="20" max="200" value="40" step="5">
                 </div>
 
@@ -176,13 +180,70 @@
                     <p>⚠️ Text is too wide! It exceeds the printable area and will be cut off.</p>
                 </div>
 
+                <div class="text-font-control">
+                    <label for="text-font-select">Choose a font:</label>
+                    <select id="text-font-select">
+                        <option value="Arial" selected>Arial</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                        <option value="Comic Sans MS">Comic Sans MS</option>
+                        <option value="Impact">Impact</option>
+                    </select>
+                </div>
+
                 <div class="dialog-question">
-                    <p>Do you want to add more designs to the sheet?</p>
+                    <p>Do you want to add more content to the sheet?</p>
                     <div class="dialog-buttons">
-                        <button id="fill-sheet-text-btn" class="btn btn-primary">No, fill sheet with this text</button>
-                        <button id="add-text-btn" class="btn btn-secondary">Yes, let me add more content</button>
+                        <button id="add-text-btn" class="btn btn-primary">Yes, let me add more content</button>
+                        <button id="fill-sheet-text-btn" class="btn btn-secondary">No, show me the sheet</button>
                     </div>
                 </div>
+            </div>
+
+            <!-- Symbols Section (hidden by default) -->
+            <div id="symbols-section" class="content-section">
+                <div id="symbol-domain-warning" class="symbol-info-banner" style="display: none;">
+                    <p>Set <code>window.svgApiDomainKey</code> before opening the dialog to enable searching the SVG
+                        API.</p>
+                </div>
+                
+                <div id="symbol-selection-panel" class="symbol-selection-panel" style="display: none;">
+                    <div id="symbol-preview" class="symbol-preview"></div>
+                    <div class="symbol-selection-details">
+                        <h4 id="symbol-title">Symbol preview</h4>
+                        <p id="symbol-tags" class="symbol-tags"></p>
+                    </div>
+                    <div class="dialog-buttons">
+                        <button id="add-symbol-btn" class="btn btn-primary">Add symbol to sheet</button>
+                        <button id="fill-sheet-symbol-btn" class="btn btn-secondary">Add & auto fill sheet</button>
+                    </div>
+                </div>
+
+                <div class="symbol-search-bar">
+                    <input type="search" id="symbol-search-input"
+                        placeholder="Search symbols (e.g. 'flower', 'moon', 'triangle')" autocomplete="off">
+                    <button id="symbol-search-btn" class="btn btn-primary">Search</button>
+                </div>
+                <p class="symbol-search-hint">Press Enter or click Search to load symbols.</p>
+
+                <div id="symbol-loading" class="symbol-loading" role="status" aria-live="polite" style="display: none;">
+                    <span>Searching thousands of icons…</span>
+                </div>
+
+                <div id="symbol-results-container" class="symbol-results-container">
+                    <div id="symbol-empty-state" class="symbol-empty-state">
+                        <p>Use the search box to explore thousands of SVG symbols.</p>
+                    </div>
+                    <div id="symbol-results-grid" class="symbol-results-grid"></div>
+                </div>
+
+                <div id="symbol-pagination" class="symbol-pagination" style="display: none;">
+                    <button id="symbol-prev-btn" class="btn btn-secondary" disabled>◀ Previous</button>
+                    <span id="symbol-page-info" class="symbol-page-info">Page 1</span>
+                    <button id="symbol-next-btn" class="btn btn-secondary" disabled>Next ▶</button>
+                </div>
+
             </div>
         </div>
     </div>
